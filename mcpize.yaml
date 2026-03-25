@@ -1,8 +1,29 @@
 name: mcprice
+description: Real-time stock & crypto MCP server for Claude and Cursor. No API keys required.
 version: "2.0"
+author: gepappas98
+repository: https://github.com/gepappas98/revolut-pulse-mcp.v2
 transport: streamable-http
 port: 8000
 entry: app.py
+
+keywords:
+  - mcp
+  - stock prices
+  - crypto prices
+  - yahoo finance
+  - binance
+  - claude desktop
+  - cursor
+  - no api key
+  - real-time
+
+tags:
+  - finance
+  - stocks
+  - crypto
+  - mcp-server
+  - ai-assistant
 
 tools:
   - name: get_price
@@ -22,3 +43,9 @@ tools:
 
   - name: crypto_top_movers
     description: Top gainers and losers from Binance 24h
+
+seo:
+  title: "mcprice: Real-Time Stock & Crypto MCP Server for Claude & Cursor | No API Key"
+  description: "Get live stock and crypto prices inside Claude or Cursor with mcprice. No API keys. 6 powerful tools including bulk pricing, top movers, and Revolut check. Free MCP server."
+  canonical: https://mcpize.com/mcp/mcprice
+  # og_image: https://mcpize.com/images/mcprice-og.png   # (προαιρετικά, αν υπάρχει εικόνα)
