@@ -1,0 +1,24 @@
+app = "mcprice"
+primary_region = "ams"   # Amsterdam — κοντά στην Ελλάδα
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  MCP_TRANSPORT = "http"
+  PORT          = "8080"
+
+[http_service]
+  internal_port       = 8080
+  force_https         = true
+  auto_stop_machines  = true
+  auto_start_machines = true
+  # FIX: was 0 → MCP server was sleeping between calls.
+  # An MCP client expects <2s response; a cold wake takes 10-20s → timeout.
+  # Keep at least 1 machine alive at all times.
+  min_machines_running = 1
+
+[[vm]]
+  memory   = "256mb"
+  cpu_kind = "shared"
+  cpus     = 1

@@ -1,48 +1,19 @@
 {
-  "_readme": "Αντίγραψε το block 'mcpServers' στο config του Claude Desktop / Cursor",
-
-  "claude_desktop": {
-    "mcpServers": {
-      "mcprice": {
-        "command": "uv",
-        "args": ["run", "--with", "fastmcp,httpx", "python", "app.py"],
-        "cwd": "/FULL/PATH/TO/mcprice"
-      }
-    }
-  },
-
-  "claude_desktop_pip": {
-    "mcpServers": {
-      "mcprice": {
-        "command": "python",
-        "args": ["app.py"],
-        "cwd": "/FULL/PATH/TO/mcprice"
-      }
-    }
-  },
-
-  "revolut_pulse_AND_mcprice_combined": {
-    "_info": "Και οι δύο servers μαζί στο Claude Desktop",
-    "mcpServers": {
-      "revolut-pulse-mcp": {
-        "command": "uv",
-        "args": ["run", "--with", "fastmcp,httpx,beautifulsoup4", "python", "app.py"],
-        "cwd": "/FULL/PATH/TO/revolut-pulse-mcp"
-      },
-      "mcprice": {
-        "command": "uv",
-        "args": ["run", "--with", "fastmcp,httpx", "python", "app.py"],
-        "cwd": "/FULL/PATH/TO/mcprice"
-      }
-    }
-  },
-
-  "remote_railway": {
-    "mcpServers": {
-      "mcprice": {
-        "type": "http",
-        "url": "https://YOUR-APP.railway.app/mcp"
-      }
+  "mcpServers": {
+    "mcprice-local": {
+      "_comment": "Local mode — run directly with uv (no Docker needed)",
+      "command": "uv",
+      "args": [
+        "run",
+        "--with", "fastmcp,httpx,yfinance",
+        "python", "app.py"
+      ],
+      "cwd": "/REPLACE/WITH/YOUR/PATH/revolut-pulse-mcp.v2"
+    },
+    "mcprice-remote": {
+      "_comment": "Remote mode — point to your deployed Fly.io / Railway URL",
+      "type": "streamable-http",
+      "url": "https://mcprice.fly.dev/mcp"
     }
   }
 }

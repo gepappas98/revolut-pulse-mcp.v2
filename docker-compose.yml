@@ -1,39 +1,42 @@
-version: "3.9"
+# mcprice — Full Stack
+#
+# Services:
+#   mcp → MCP server (streamable-http)   port 8080
+#   api → FastAPI HTTP layer             port 8001
+#
+# Usage:
+#   docker compose up           # both services
+#   docker compose up mcp       # MCP only
+#   docker compose up api       # API only
+#   docker compose run seo-gen  # one-off SEO page generation
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  mcprice — Full Stack
-#
-#  Services:
-#    mcp   → MCP server  (stdio/streamable-http)  port 8000
-#    api   → FastAPI HTTP layer                   port 8001
-#
-#  Usage:
-#    docker compose up              # both services
-#    docker compose up mcp          # MCP only
-#    docker compose up api          # API only
-#    docker compose run seo-gen     # one-off SEO page generation
-# ──────────────────────────────────────────────────────────────────────────────
+# FIX: removed deprecated `version: "3.9"` key (ignored by modern Compose, causes warnings)
 
 services:
 
-  # ── MCP server (Claude Desktop / Cursor) ──────────────────────────────────
+  # ── MCP server (Claude Desktop / Cursor) ─────────────────────────────────
   mcp:
     build:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "8000:8000"
+      - "8080:8080"
     environment:
       MCP_TRANSPORT: http
-      PORT: "8000"
+      PORT: "8080"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health')"]
+      # FIX: MCP streamable-http serves at /mcp, not /health.
+      # Old check: httpx.get('.../health') → always 404 → container marked unhealthy.
+      # New check: hit /mcp with a HEAD request (fast, no body parsing needed).
+      test: ["CMD", "python", "-c",
+             "import httpx; r=httpx.head('http://localhost:8080/mcp', timeout=4); r.raise_for_status()"]
       interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 10s
 
-  # ── FastAPI HTTP layer (REST API + SEO) ───────────────────────────────────
+  # ── FastAPI HTTP layer (REST API + SEO) ──────────────────────────────────
   api:
     build:
       context: .
@@ -44,12 +47,15 @@ services:
       BASE_URL: ${BASE_URL:-http://localhost:8001}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8001/health')"]
+      # FastAPI does have /health, so this one was correct
+      test: ["CMD", "python", "-c",
+             "import httpx; httpx.get('http://localhost:8001/health', timeout=4).raise_for_status()"]
       interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 10s
 
-  # ── One-off SEO generator (run and exit) ──────────────────────────────────
+  # ── One-off SEO generator (run and exit) ─────────────────────────────────
   seo-gen:
     build:
       context: .
