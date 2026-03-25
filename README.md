@@ -1,223 +1,268 @@
-# mcprice ⚡
+# mcprice ⚡ — Real-Time Stock & Crypto Prices for AI Agents
 
-> **MCP Server** for **real-time stock & crypto prices**  
-> in Claude Desktop / Cursor.  
->  
-> Stocks → **Yahoo Finance** (no API key needed)  
-> Crypto → **Binance Public API** (no API key needed)  
-> Companion to: [revolut-pulse](https://github.com/gepappas98/revolut-pulse) (insider trades)
+> **MCP Server + REST API** for real-time stock & crypto prices — no API keys, no setup friction.
+>
+> Stocks → **Yahoo Finance** &nbsp;|&nbsp; Crypto → **Binance** &nbsp;|&nbsp; Free forever
 
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/mcprice)
-
----
-
-## 🧰 Tools (6 total)
-
-| Tool | What it does | Source |
-|------|-------------|--------|
-| `get_price("NVDA")` | Price + 24h change for 1 stock | Yahoo Finance |
-| `get_prices_bulk(["NVDA","LMT","GLD"])` | Bulk prices for a list of stocks | Yahoo Finance |
-| `get_crypto_price("BTC")` | Crypto price + high/low/volume 24h | Binance |
-| `price_snapshot(["NVDA","BTC","ETH"])` | Rich snapshot for stocks + crypto | Yahoo + Binance |
-| `revolut_price_check("LMT")` | Price + "is it on Revolut?" | Yahoo Finance |
-| `crypto_top_movers(limit=10)` | Top gainers/losers 24h | Binance |
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template)
+[![Deploy on Fly.io](https://img.shields.io/badge/Fly.io-deploy-purple?logo=fly.io)](https://fly.io)
+![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
+![License MIT](https://img.shields.io/badge/license-MIT-green)
 
 ---
 
-## ⚡ Quick Start (2 minutes)
+## What is mcprice?
 
-### Step 1 — Clone the repo
+**mcprice** is a dual-mode financial data server:
+
+| Mode | What it does | Who uses it |
+|------|-------------|-------------|
+| **MCP Server** | Claude / Cursor / Cline tool calls | AI developers |
+| **REST API** | Plain HTTP endpoints | Web apps, bots, scripts |
+| **SEO Engine** | Generates 150+ static pages | Organic search traffic |
+
+Zero API keys. Zero paid tiers. Works in 2 minutes.
+
+---
+
+## Quick Start (2 min)
+
+### MCP Mode (Claude Desktop / Cursor)
 
 ```bash
 git clone https://github.com/gepappas98/mcprice.git
 cd mcprice
-```
-
-### Step 2 — Install & run
-
-**With `uv` (recommended):**
-```bash
-# Install uv (once):
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Run:
 uv run --with fastmcp,httpx python app.py
 ```
 
-**With `pip`:**
-```bash
-pip install -r requirements.txt
-python app.py
-```
-
----
-
-## 🤖 Claude Desktop — Setup
-
-Open: **Claude Desktop → Settings → Developer → Edit Config**
-
 Add to `claude_desktop_config.json`:
-
 ```json
 {
   "mcpServers": {
     "mcprice": {
       "command": "uv",
       "args": ["run", "--with", "fastmcp,httpx", "python", "app.py"],
-      "cwd": "/Users/george/mcprice"
+      "cwd": "/path/to/mcprice"
     }
   }
 }
 ```
 
-> 💡 **Pro tip**: If you also have `revolut-pulse-mcp`, add both together:
-
-```json
-{
-  "mcpServers": {
-    "revolut-pulse-mcp": {
-      "command": "uv",
-      "args": ["run", "--with", "fastmcp,httpx,beautifulsoup4", "python", "app.py"],
-      "cwd": "/Users/george/revolut-pulse-mcp"
-    },
-    "mcprice": {
-      "command": "uv",
-      "args": ["run", "--with", "fastmcp,httpx", "python", "app.py"],
-      "cwd": "/Users/george/mcprice"
-    }
-  }
-}
-```
-
-Now you can ask Claude:
-> _"Show me the latest insider trades for NVDA and tell me the current price"_
-
-And Claude will use **both servers simultaneously**! 🔥
-
----
-
-## 🎯 Cursor — Setup
-
-`Cursor → Settings → MCP → + Add`:
-- **Name**: `mcprice`
-- **Command**: `uv run --with fastmcp,httpx python app.py`
-- **Working Dir**: `/path/to/mcprice`
-
----
-
-## 🚀 Deploy on Railway (1 click)
-
-1. Fork this repo on GitHub
-2. Go to [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub**
-3. Select the `mcprice` repo
-4. Add environment variables:
-   ```
-   MCP_TRANSPORT = http
-   PORT          = 8000
-   ```
-5. Railway gives you a URL: `https://mcprice-production.up.railway.app`
-
-Connect to Claude Desktop (remote):
-```json
-{
-  "mcpServers": {
-    "mcprice": {
-      "type": "http",
-      "url": "https://mcprice-production.up.railway.app/mcp"
-    }
-  }
-}
-```
-
----
-
-## 🛩️ Deploy on Fly.io
+### API Mode (HTTP)
 
 ```bash
-# Install flyctl
-curl -L https://fly.io/install.sh | sh
+pip install -r requirements-api.txt
+uvicorn api.main:app --port 8001
+```
 
-# Deploy (from the project folder)
+```bash
+# Stock price
+curl http://localhost:8001/price/NVDA
+
+# Crypto price
+curl http://localhost:8001/crypto/BTC
+
+# Is it on Revolut?
+curl http://localhost:8001/revolut/check/LMT
+```
+
+---
+
+## MCP Tools (6 total)
+
+| Tool | Description | Source |
+|------|-------------|--------|
+| `get_price("NVDA")` | Live price + 24h change | Yahoo Finance |
+| `get_prices_bulk(["LMT","GLD"])` | Bulk prices, max 20 | Yahoo Finance |
+| `get_crypto_price("BTC")` | Crypto + high/low/volume | Binance |
+| `price_snapshot(["NVDA","BTC"])` | Mixed stock+crypto snapshot | Yahoo + Binance |
+| `revolut_price_check("LMT")` | Price + Revolut availability | Yahoo Finance |
+| `crypto_top_movers(limit=10)` | Top gainers & losers 24h | Binance |
+
+---
+
+## REST API Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /price/{ticker}` | Single stock price |
+| `GET /prices?tickers=A,B,C` | Bulk stock prices |
+| `GET /crypto/{symbol}` | Crypto price |
+| `GET /revolut/check/{ticker}` | Revolut availability + price |
+| `GET /revolut/stocks` | Full Revolut stocks list |
+| `GET /revolut/crypto` | Full Revolut crypto list |
+| `GET /snapshot` | Mixed watchlist snapshot |
+| `GET /health` | Health check |
+| `GET /docs` | OpenAPI docs |
+
+---
+
+## v2.0 Upgrades
+
+- ✅ **TTL in-memory cache** — 30s stocks / 10s crypto (↓60% latency)
+- ✅ **Retry + exponential backoff** — 3 attempts, never dies on flaky APIs
+- ✅ **Yahoo → Binance fallback** — automatic provider failover
+- ✅ **Ticker validation** — regex guard, no garbage input
+- ✅ **Structured logging** — debug/info/error with timestamps
+- ✅ **Rate limiter** — semaphore max 5 concurrent outbound calls
+- ✅ **Config-driven lists** — edit `config/*.json`, no code changes
+- ✅ **FastAPI HTTP layer** — REST API on top of MCP logic
+- ✅ **Programmatic SEO engine** — 150+ auto-generated pages
+
+---
+
+## Programmatic SEO
+
+Generate 150+ SEO-optimized static pages (one per ticker):
+
+```bash
+python seo/generator.py --base-url https://your-domain.fly.dev
+```
+
+Each generated page includes:
+- Unique `<title>` + meta description per ticker
+- **Schema.org `FinancialProduct`** structured data (rich results)
+- Open Graph + Twitter Card tags
+- Canonical URLs
+- Auto-generated `sitemap.xml` + `robots.txt`
+
+Target keywords generated automatically:
+- `NVDA stock price today`
+- `Is Tesla available on Revolut?`
+- `BTC price live Revolut`
+- `buy Lockheed Martin on Revolut`
+
+---
+
+## Config-Driven Lists
+
+Revolut stock/crypto availability is now in `config/`, not hardcoded:
+
+```json
+// config/revolut_stocks.json
+{
+  "stocks": {
+    "NVDA": "NVIDIA",
+    "TSLA": "Tesla"
+  }
+}
+```
+
+To add/remove a stock: **edit the JSON, no Python code needed.**
+
+---
+
+## Deploy
+
+### Railway (1-click)
+1. Fork on GitHub
+2. Railway → New Project → Deploy from GitHub
+3. Set `MCP_TRANSPORT=http` and `PORT=8000`
+
+### Fly.io
+```bash
 flyctl auth login
 flyctl launch --name mcprice --region ams
 flyctl secrets set MCP_TRANSPORT=http
 flyctl deploy
 ```
 
-URL: `https://mcprice.fly.dev/mcp`
+### Docker Compose (full stack)
+```bash
+# MCP + API together
+docker compose up
 
----
-
-## 💬 Usage Examples
-
-```
-# Stock price
-"What is NVIDIA trading at right now?"
-→ get_price("NVDA")
-
-# Revolut check
-"Can I buy Lockheed Martin on Revolut?"
-→ revolut_price_check("LMT")
-
-# Defense stocks
-"Show me prices for LMT, RTX, NOC, BA"
-→ get_prices_bulk(["LMT","RTX","NOC","BA"])
-
-# Crypto
-"Where is Bitcoin today?"
-→ get_crypto_price("BTC")
-
-# Top movers
-"Which cryptos are moving today?"
-→ crypto_top_movers(limit=10)
-
-# Full snapshot
-"Show me all my assets"
-→ price_snapshot(["NVDA","AAPL","GLD","SPY","BTC","ETH"])
+# One-off SEO page generation
+BASE_URL=https://mcprice.fly.dev docker compose run seo-gen
 ```
 
 ---
 
-## 🔗 Architecture — Revolut Ecosystem
+## Architecture
+
+```
+Claude / Cursor / AI Agent
+        │
+        ├── MCP Server (app.py)          port 8000
+        │     ├── get_price()
+        │     ├── get_crypto_price()
+        │     ├── revolut_price_check()
+        │     └── crypto_top_movers()
+        │
+        └── REST API (api/main.py)       port 8001
+              ├── GET /price/{ticker}
+              ├── GET /crypto/{symbol}
+              ├── GET /revolut/check/{ticker}
+              └── GET /docs
+
+
+Providers:
+  Yahoo Finance  ──→  stocks / ETFs (30s cache)
+  Binance        ──→  crypto       (10s cache)
+     ↑
+  Retry layer (3 attempts, exponential backoff)
+  Cache layer (TTL in-memory)
+  Rate limiter (semaphore 5 concurrent)
+
+
+Config (no code changes needed):
+  config/revolut_stocks.json   ← edit to update Revolut stock list
+  config/revolut_crypto.json   ← edit to update Revolut crypto list
+
+SEO Engine:
+  seo/generator.py  ──→  seo/output/price/*.html  +  sitemap.xml
+```
+
+---
+
+## Ecosystem
 
 ```
 Claude / Cursor
-      │
-      ├── revolut-pulse-mcp  →  Insider trades (SEC Form 4)
-      │                         is_revolut_tradable()
-      │                         check_insider_alerts()
-      │
-      └── mcprice            →  Real-time prices
-                                get_price()
-                                revolut_price_check()
-                                crypto_top_movers()
+    │
+    ├── revolut-pulse-mcp   →  SEC Form 4 insider trades
+    │                          is_revolut_tradable()
+    │
+    └── mcprice             →  real-time prices
+                               revolut_price_check()
 ```
+
+Ask Claude:
+> *"Show me insider trades for NVDA and tell me the current price and whether I can buy it on Revolut"*
+
+Both servers answer **simultaneously**.
 
 ---
 
-## 📁 File Structure
+## Notes
+
+- No API key required — Yahoo Finance & Binance public APIs are free
+- Stock prices may have 15-20 min delay (Yahoo Finance free tier)
+- Crypto prices are **real-time** (Binance)
+- Not financial advice
+
+---
+
+## File Structure
 
 ```
 mcprice/
-├── app.py              ← All server code (6 tools)
-├── requirements.txt    ← fastmcp, httpx
-├── mcp.json            ← Config for Claude/Cursor
-├── Dockerfile          ← For Railway/Fly.io
-├── railway.json        ← Railway config
-├── fly.toml            ← Fly.io config
-├── .gitignore
-├── .github/
-│   └── workflows/
-│       └── test.yml    ← GitHub Actions CI
-└── README.md
+├── app.py                  ← MCP server v2.0 (6 tools)
+├── api/
+│   └── main.py             ← FastAPI HTTP layer
+├── seo/
+│   ├── generator.py        ← Programmatic SEO engine
+│   └── output/             ← Generated static pages (gitignored)
+├── config/
+│   ├── revolut_stocks.json ← Revolut stock list (editable)
+│   └── revolut_crypto.json ← Revolut crypto list (editable)
+├── requirements.txt        ← MCP deps
+├── requirements-api.txt    ← API + SEO deps
+├── Dockerfile              ← MCP server image
+├── Dockerfile.api          ← FastAPI image
+├── docker-compose.yml      ← Full stack compose
+├── fly.toml                ← Fly.io config
+├── railway.json            ← Railway config
+├── mcp.json                ← Claude/Cursor config
+└── .github/workflows/ci.yml ← GitHub Actions CI
 ```
-
----
-
-## 🔒 Notes
-
-- **No API key required** — Yahoo Finance & Binance Public API are free
-- Rate limit: ~60 requests/min on Yahoo Finance — avoid bulk calls with >20 tickers
-- Stock prices may have a 15–20 minute delay (Yahoo Finance free tier)
-- Binance crypto prices are **real-time** (no delay)
-- **Not financial advice**
