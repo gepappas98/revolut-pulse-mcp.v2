@@ -7,7 +7,7 @@
 > Crypto → **Binance Public API** (no API key needed)  
 > Companion to: [revolut-pulse](https://github.com/gepappas98/revolut-pulse) (insider trades)
 
-
+[![mcprice MCP server](https://glama.ai/mcp/servers/gepappas98/revolut-pulse-mcp.v2/badges/card.svg)](https://glama.ai/mcp/servers/gepappas98/revolut-pulse-mcp.v2)
 
 ---
 
@@ -230,4 +230,3 @@ Improved structure with api/, config/, seo/ folders, better Docker support, and 
 ⭐ Star the repo if you're using it!
 
 Just say the word! 🚀
-
