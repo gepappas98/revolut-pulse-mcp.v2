@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 ╔══════════════════════════════════════════════════════════════════╗
-║  mcprice v2.1  (fixed)                                          ║
+║  mcprice v2.2  (fixed)                                          ║
 ║  Real-Time Price MCP Server for Claude/Cursor                   ║
 ║                                                                  ║
 ║  Stocks  → yfinance  (bypasses Yahoo datacenter blocks)          ║
 ║  Crypto  → Binance Public API (no key needed)                    ║
 ║  Revolut → marks assets tradeable on Revolut                    ║
 ║                                                                  ║
-║  v2.1 fixes:                                                     ║
+║  v2.2 fixes:                                                     ║
 ║  ✅ FIX #1 — Semaphore lazy-init (no more event-loop crash)      ║
 ║  ✅ FIX #2 — Yahoo null-result guard (no more IndexError)        ║
 ║  ✅ FIX #3 — yfinance replaces raw HTTP (bypasses cloud blocks)  ║
@@ -16,6 +16,7 @@
 ║  ✅ FIX #6 — Cache stampede protection (in-flight dedup)         ║
 ║  ✅ FIX #7 — Proper List[str] typing for MCP                     ║
 ║  ✅ FIX #8 — Binance 429 handled with smart backoff              ║
+║  ✅ FIX #9 — Accept header middleware (fixes MCPize 406 warning) ║
 ╚══════════════════════════════════════════════════════════════════╝
 """
 
@@ -31,6 +32,7 @@ from typing import List, Optional
 import httpx
 import yfinance as yf
 from fastmcp import FastMCP
+from starlette.middleware.base import BaseHTTPMiddleware
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LOGGING
@@ -47,6 +49,41 @@ logger = logging.getLogger("mcprice")
 # ─────────────────────────────────────────────────────────────────────────────
 
 mcp = FastMCP("mcprice")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX #9 — ACCEPT HEADER MIDDLEWARE (fixes MCPize 406 warning)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AcceptMiddleware(BaseHTTPMiddleware):
+    """
+    Forces the exact Accept header required by the MCP Streamable HTTP spec.
+    MCPize health probes (and some clients) often send "*/*" or only
+    "application/json", which triggers a strict 406 from FastMCP.
+    This middleware normalises it before the request reaches the MCP router.
+    """
+
+    async def dispatch(self, request, call_next):
+        accept = request.headers.get("accept", "")
+        if not accept or accept.strip() == "*/*" or "application/json" not in accept.lower():
+            logger.debug(
+                "AcceptMiddleware: forcing Accept: application/json, text/event-stream (was: %s)",
+                accept or "<missing>",
+            )
+            # Rebuild headers list without the old Accept (keys are bytes)
+            headers = [
+                (k, v)
+                for k, v in request.scope.get("headers", ())
+                if k.lower() != b"accept"
+            ]
+            headers.append((b"accept", b"application/json, text/event-stream"))
+            request.scope["headers"] = tuple(headers)
+
+        return await call_next(request)
+
+
+# Register the middleware with FastMCP (it will be applied to the ASGI app)
+mcp.add_middleware(AcceptMiddleware)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # VALIDATION
@@ -646,8 +683,20 @@ if __name__ == "__main__":
     transport = os.environ.get("MCP_TRANSPORT", "stdio")
     if transport == "http":
         port = int(os.environ.get("PORT", "8080"))
-        logger.info("mcprice v2.1 starting on http://0.0.0.0:%d/mcp", port)
-        mcp.run(transport="streamable-http", host="0.0.0.0", port=port)
+        logger.info("mcprice v2.2 starting on http://0.0.0.0:%d/mcp", port)
+
+        # Use explicit http_app + uvicorn so the AcceptMiddleware is 100% applied
+        # (mcp.run internally does the same, but this guarantees middleware order)
+        app = mcp.http_app(transport="streamable-http")
+
+        # Import here so stdio mode never needs uvicorn
+        import uvicorn
+        uvicorn.run(
+            app,
+            host="0.0.0.0",
+            port=port,
+            log_level="info",
+        )
     else:
-        logger.info("mcprice v2.1 starting (stdio mode)")
+        logger.info("mcprice v2.2 starting (stdio mode)")
         mcp.run(transport="stdio")
