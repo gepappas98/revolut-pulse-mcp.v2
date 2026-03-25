@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>mcprice: Real-Time Stock & Crypto MCP Server for Claude & Cursor | No API Key</title>
+    <meta name="description" content="Get live stock and crypto prices inside Claude or Cursor with mcprice. No API keys. 6 powerful tools including bulk pricing, top movers, and Revolut check. Free MCP server.">
+    <link rel="canonical" href="https://mcpize.com/mcp/mcprice">
+    <meta name="robots" content="index, follow">
+    <meta property="og:title" content="mcprice - Real-Time Market Data MCP Server">
+    <meta property="og:description" content="Real-time stock & crypto prices for Claude & Cursor. No API keys required.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://mcpize.com/mcp/mcprice">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="mcprice - MCP Server for Real-Time Prices">
+    <meta name="twitter:description" content="Live stock and crypto prices inside Claude and Cursor. No API keys.">
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "mcprice",
+      "description": "Real-time stock & crypto MCP server for Claude and Cursor. No API keys required.",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "Cross-platform",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      },
+      "featureList": "get_price, get_prices_bulk, get_crypto_price, price_snapshot, revolut_price_check, crypto_top_movers",
+      "url": "https://mcpize.com/mcp/mcprice",
+      "sameAs": "https://github.com/gepappas98/revolut-pulse-mcp.v2",
+      "downloadUrl": "https://github.com/gepappas98/revolut-pulse-mcp.v2/archive/refs/heads/main.zip"
+    }
+    </script>
+    <style>
+        /* Minimal styling for readability – keep your existing design if any */
+        body { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.5; max-width: 1000px; margin: 0 auto; padding: 2rem; color: #111; background: #fff; }
+        h1 { font-size: 2.5rem; margin-bottom: 0.5rem; }
+        h2 { font-size: 1.8rem; margin-top: 2rem; border-bottom: 1px solid #eaecef; padding-bottom: 0.3rem; }
+        .badges { margin: 1rem 0; }
+        .badges span { background: #f0f0f0; padding: 0.2rem 0.6rem; border-radius: 20px; font-size: 0.8rem; margin-right: 0.5rem; }
+        pre { background: #f6f8fa; padding: 1rem; border-radius: 6px; overflow-x: auto; }
+        code { font-family: 'SF Mono', Monaco, monospace; }
+        .cta { background: #f0f7ff; padding: 1rem; border-radius: 8px; text-align: center; margin: 2rem 0; }
+        .cta a { background: #0969da; color: white; padding: 0.6rem 1.2rem; text-decoration: none; border-radius: 6px; display: inline-block; margin: 0.5rem; }
+        .cta a.github { background: #24292f; }
+        footer { margin-top: 3rem; font-size: 0.8rem; color: #57606a; border-top: 1px solid #eaecef; padding-top: 1rem; }
+    </style>
+</head>
+<body>
+    <h1>mcprice — Real-Time Market Data for AI Assistants</h1>
+    <div class="badges">
+        <span>finance</span> <span>stocks</span> <span>crypto</span> <span>MCP Server</span> <span>No API Key</span>
+    </div>
+    <p>Get live stock and crypto prices directly inside Claude or Cursor. No API keys. No setup headaches.</p>
+
+    <div class="cta">
+        <a href="https://github.com/gepappas98/revolut-pulse-mcp.v2" class="github">⭐ Star on GitHub</a>
+        <a href="https://railway.app/template/mcprice">🚀 Deploy on Railway</a>
+        <a href="https://github.com/gepappas98/revolut-pulse-mcp.v2#readme">📖 Read Docs</a>
+    </div>
+
+    <h2>🧰 6 Tools</h2>
+    <ul>
+        <li><strong>get_price</strong> — Current price + 24h change for any stock or ETF</li>
+        <li><strong>get_prices_bulk</strong> — Fetch up to 20 tickers at once</li>
+        <li><strong>get_crypto_price</strong> — Binance real-time crypto data (BTC, ETH, SOL...)</li>
+        <li><strong>price_snapshot</strong> — Full watchlist snapshot: stocks + crypto + market mood</li>
+        <li><strong>revolut_price_check</strong> — Price + "is this stock available on Revolut?"</li>
+        <li><strong>crypto_top_movers</strong> — Top gainers & losers from Binance 24h</li>
+    </ul>
+
+    <h2>⚡ Why mcprice?</h2>
+    <p>Unlike traditional APIs, mcprice is built specifically for AI assistants. No API keys, no complex setup — just real‑time prices in your conversation. Perfect for portfolio tracking, trading journals, and AI‑powered analysis.</p>
+
+    <h2>🚀 Quick Start</h2>
+    <p>Install in 2 minutes:</p>
+    <pre><code>git clone https://github.com/gepappas98/revolut-pulse-mcp.v2.git
+cd revolut-pulse-mcp.v2
+uv run --with fastmcp,httpx python app.py</code></pre>
+
+    <h2>🤖 Claude Desktop Setup</h2>
+    <p>Add to your <code>claude_desktop_config.json</code>:</p>
+    <pre><code>{
+  "mcpServers": {
+    "mcprice": {
+      "command": "uv",
+      "args": ["run", "--with", "fastmcp,httpx", "python", "app.py"],
+      "cwd": "/path/to/revolut-pulse-mcp.v2"
+    }
+  }
+}</code></pre>
+
+    <h2>📊 Data Sources & Reliability</h2>
+    <ul>
+        <li><strong>Stocks & ETFs</strong>: Yahoo Finance (no key, 15‑20 min delay on free tier)</li>
+        <li><strong>Crypto</strong>: Binance Public API (real‑time, no delay)</li>
+        <li><strong>Caching</strong>: 30s for stocks, 10s for crypto</li>
+        <li><strong>Auto‑retry</strong> with exponential backoff</li>
+    </ul>
+
+    <h2>🔗 Companion Server</h2>
+    <p>Works alongside <a href="https://mcpize.com/mcp/revolut-pulse">revolut-pulse-mcp</a> for insider trading alerts and SEC Form 4 data. Combine both for a complete market intelligence stack.</p>
+
+    <h2>📄 License & Disclaimer</h2>
+    <p><strong>⚠️ Not financial advice.</strong> Data may be delayed. See <a href="https://github.com/gepappas98/revolut-pulse-mcp.v2/blob/main/README.md#-notes">Terms of Use</a>.</p>
+
+    <footer>
+        <p>mcprice is an open‑source MCP server. Contribute on <a href="https://github.com/gepappas98/revolut-pulse-mcp.v2">GitHub</a>.</p>
+    </footer>
+</body>
+</html>
