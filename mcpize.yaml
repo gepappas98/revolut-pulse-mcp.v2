@@ -1,10 +1,9 @@
 name: mcprice
 description: >
   Real-time stock & crypto prices for AI agents — with instant Revolut availability checks.
-  No API keys. Ask Claude: "Is NVDA on Revolut and what's the price?" or
-  "Calculate my portfolio P&L" or "Give me a morning market overview."
-  Stocks via yfinance, crypto via Binance. 8 tools including bulk pricing,
-  portfolio P&L calculator, full market dashboard, and top movers.
+  No API keys. Ask Claude: "Is NVDA on Revolut?", "Calculate my portfolio P&L",
+  "Give me a morning market overview", or "Scan the defense sector for Revolut picks."
+  10 tools. Stocks via yfinance, crypto via Binance.
 version: "2.2"
 author: gepappas98
 repository: https://github.com/gepappas98/revolut-pulse-mcp.v2
@@ -17,7 +16,6 @@ keywords:
   - revolut
   - stock prices
   - crypto prices
-  - yahoo finance
   - yfinance
   - binance
   - claude desktop
@@ -26,7 +24,7 @@ keywords:
   - real-time
   - portfolio pnl
   - market overview
-  - morning briefing
+  - sector scan
 
 tags:
   - finance
@@ -66,12 +64,18 @@ tools:
   - name: market_overview
     description: Full market dashboard — major indices (SPY/QQQ/DIA/IWM), commodities (GLD/SLV/USO/TLT), and top crypto (BTC/ETH/SOL/BNB) with mood indicator. No arguments needed.
 
+  - name: revolut_watchlist
+    description: Bulk Revolut availability check + live prices for a mixed stock/crypto watchlist — splits into available vs not available on Revolut
+
+  - name: revolut_sector_scan
+    description: Scan an entire sector (tech/defense/crypto/energy/finance/health/etf/ai) — live prices + best Revolut-tradeable pick of the day
+
 seo:
-  title: "mcprice: Real-Time Stock & Crypto Prices for Claude & Cursor | Portfolio P&L | No API Key"
+  title: "mcprice: Real-Time Stock & Crypto Prices for Claude & Cursor | Portfolio P&L | Revolut Checker | No API Key"
   description: >
     Get live stock and crypto prices inside Claude or Cursor with mcprice.
-    No API keys required. 8 powerful tools: bulk pricing, Revolut availability checker,
-    real-time portfolio P&L, full market overview, and crypto top movers.
+    No API keys required. 10 tools: bulk pricing, Revolut availability checker,
+    real-time portfolio P&L, full market overview, sector scanner, crypto top movers.
     Free MCP server. Stocks via yfinance, crypto via Binance.
   canonical: https://mcprice.fly.dev
   og_image: https://mcprice.fly.dev/og-image.png
