@@ -1,4 +1,109 @@
-runtime: container
-startCommand:
-  type: http
-  port: 8080
+name: mcprice
+description: >
+  Real-time stock & crypto prices for AI agents â€” with Revolut availability,
+  Fear & Greed index, technical signals (RSI/MACD/SMA/EMA), SEC insider flow,
+  earnings calendar, crypto funding rates, and price alert monitoring.
+  16 tools. No API keys. Free forever.
+  Ask Claude: "Is NVDA on Revolut?", "What is the Fear & Greed index?",
+  "Give me RSI signal for AAPL", "Scan defense sector", "When does NVDA report earnings?"
+version: "3.0"
+author: gepappas98
+repository: https://github.com/gepappas98/revolut-pulse-mcp.v2
+transport: streamable-http
+port: 8080
+entry: app.py
+
+keywords:
+  - mcp
+  - revolut
+  - stock prices
+  - crypto prices
+  - yfinance
+  - binance
+  - claude desktop
+  - cursor
+  - no api key
+  - real-time
+  - portfolio pnl
+  - market overview
+  - sector scan
+  - fear greed index
+  - rsi macd technical analysis
+  - insider trading sec form 4
+  - earnings calendar
+  - crypto funding rates
+  - price alerts
+
+tags:
+  - finance
+  - stocks
+  - crypto
+  - revolut
+  - mcp-server
+  - ai-assistant
+  - real-time-prices
+  - no-api-key
+  - portfolio
+  - trading
+  - market-overview
+  - technical-analysis
+  - insider-trading
+  - earnings
+
+tools:
+  - name: get_price
+    description: Current price + 24h change for one stock or ETF (yfinance, cloud-reliable)
+
+  - name: get_prices_bulk
+    description: Fetch live prices for up to 20 tickers at once
+
+  - name: get_crypto_price
+    description: Real-time crypto price from Binance â€” BTC, ETH, SOL and 50+ more
+
+  - name: price_snapshot
+    description: Full watchlist snapshot â€” stocks + crypto combined with market mood indicator
+
+  - name: revolut_price_check
+    description: Price + instant check if a stock or ETF is available on Revolut ðŸ’³
+
+  - name: crypto_top_movers
+    description: Top crypto gainers and losers from Binance 24h â€” with Revolut availability filter
+
+  - name: portfolio_pnl
+    description: Real-time P&L calculator â€” pass your holdings (ticker, qty, avg_price) and get live profit/loss per asset + portfolio summary
+
+  - name: market_overview
+    description: Full market dashboard â€” major indices (SPY/QQQ/DIA/IWM), commodities (GLD/SLV/USO/TLT), and top crypto (BTC/ETH/SOL/BNB). No arguments needed.
+
+  - name: revolut_watchlist
+    description: Bulk Revolut availability check + live prices for a mixed stock/crypto watchlist â€” splits into available vs not available
+
+  - name: revolut_sector_scan
+    description: Scan an entire sector (tech/defense/crypto/energy/finance/health/etf/ai) â€” live prices + best Revolut-tradeable pick of the day
+
+  - name: fear_greed_index
+    description: "NEW: Current Fear & Greed Index (0-100) with trading bias signal â€” Extreme Fear = buy, Extreme Greed = sell. 5-day history + Revolut entry tip."
+
+  - name: earnings_calendar
+    description: "NEW: Next earnings date + EPS estimates for a list of stocks. Flags which are tradeable on Revolut for pre-earnings plays."
+
+  - name: technical_signals
+    description: "NEW: RSI-14, SMA20, SMA50, EMA9, MACD â€” full technical buy/sell signal for any stock. No API key. Revolut tradeable flag included."
+
+  - name: insider_flow_scan
+    description: "NEW: SEC Form 4 insider buying/selling â€” cluster buy detection, Revolut flags, buy/sell ratio. Updated every 2h via GitHub Actions."
+
+  - name: crypto_funding_rates
+    description: "NEW: Binance perpetual futures funding rates â€” contrarian signal. Extreme positive = crowded longs (caution). Negative = short squeeze setup."
+
+  - name: price_alert_check
+    description: "NEW: Multi-ticker price target monitor â€” pass alerts with target levels and get instant triggered/pending verdict + Revolut trade CTA."
+
+seo:
+  title: "mcprice v3: 16 Free MCP Tools â€” Real-Time Stocks, Crypto, RSI/MACD, Fear & Greed, SEC Insider Flow | No API Key"
+  description: >
+    Get live stock and crypto prices inside Claude or Cursor with mcprice v3.
+    16 free tools: bulk pricing, Revolut checker, portfolio P&L, Fear & Greed index,
+    RSI/MACD technical signals, SEC insider flow scan, earnings calendar,
+    crypto funding rates, price alert monitoring. No API keys required.
+  canonical: https://mcpize.com/mcp/mcprice
