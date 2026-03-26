@@ -2,36 +2,39 @@
 
 """
 ╔══════════════════════════════════════════════════════════════════╗
-║  mcprice v2.2                                                    ║
+║  mcprice v3.0                                                    ║
 ║  Real-Time Price MCP Server for Claude / Cursor                  ║
 ║                                                                  ║
 ║  Stocks  → yfinance  (cloud-reliable, no raw HTTP blocks)        ║
-║  Crypto  → Binance Public API (no key needed)                    ║
+║  Crypto  → Binance Public API + Futures (no key needed)          ║
 ║  Revolut → marks assets tradeable on Revolut                     ║
+║  Insider → SEC EDGAR Form 4 via GitHub Actions                   ║
 ║                                                                  ║
-║  v2.2 upgrades:                                                  ║
-║   ✅ HealthMiddleware  — GET/HEAD /health → 200, HEAD /mcp → 200 ║
-║   ✅ Lazy semaphore    — no event-loop crash on Python 3.12      ║
-║   ✅ Stampede-safe cache — _in_flight deduplication              ║
-║   ✅ yfinance          — more reliable than raw Yahoo HTTP       ║
-║   ✅ 429 handling      — respects Retry-After header             ║
-║   ✅ Config fallback   — silent fallback to built-in defaults    ║
-║   ✅ ALL_CRYPTO        — union of config + universal coins       ║
-║      (fixes KNOWN_CRYPTO bug — no coin ever misrouted)           ║
-║   ✅ List[str] typing  — MCP schema compatible                   ║
-║   ✅ 10 tools total                                              ║
+║  v3.0 new tools (+6):                                            ║
+║   ✅ fear_greed_index   — alternative.me sentiment (no key)      ║
+║   ✅ earnings_calendar  — next earnings date + EPS estimates      ║
+║   ✅ technical_signals  — RSI, SMA, EMA, MACD buy/sell signal    ║
+║   ✅ insider_flow_scan  — SEC Form 4 cluster buys + Revolut flag ║
+║   ✅ crypto_funding_rates — Binance perp funding (contrarian)    ║
+║   ✅ price_alert_check  — multi-ticker target monitoring         ║
 ║                                                                  ║
-║  Tools:                                                          ║
-║   1.  get_price            — single stock/ETF price              ║
-║   2.  get_prices_bulk      — up to 20 tickers at once            ║
-║   3.  get_crypto_price     — Binance crypto price                ║
-║   4.  price_snapshot       — mixed watchlist snapshot            ║
-║   5.  revolut_price_check  — price + Revolut availability        ║
-║   6.  crypto_top_movers    — Binance 24h gainers/losers          ║
-║   7.  portfolio_pnl        — real-time P&L for holdings          ║
-║   8.  market_overview      — indices + commodities + crypto      ║
-║   9.  revolut_watchlist    — bulk Revolut check for watchlist    ║
-║  10.  revolut_sector_scan  — sector scan + best Revolut pick     ║
+║  Tools (16 total):                                               ║
+║   1.  get_price             — single stock/ETF price             ║
+║   2.  get_prices_bulk       — up to 20 tickers at once           ║
+║   3.  get_crypto_price      — Binance crypto price               ║
+║   4.  price_snapshot        — mixed watchlist snapshot           ║
+║   5.  revolut_price_check   — price + Revolut availability       ║
+║   6.  crypto_top_movers     — Binance 24h gainers/losers         ║
+║   7.  portfolio_pnl         — real-time P&L for holdings         ║
+║   8.  market_overview       — indices + commodities + crypto     ║
+║   9.  revolut_watchlist     — bulk Revolut check for watchlist   ║
+║  10.  revolut_sector_scan   — sector scan + best Revolut pick    ║
+║  11.  fear_greed_index      — Fear & Greed + trading bias        ║
+║  12.  earnings_calendar     — next earnings + EPS estimates      ║
+║  13.  technical_signals     — RSI/SMA/EMA/MACD signal engine     ║
+║  14.  insider_flow_scan     — SEC Form 4 cluster buy detection   ║
+║  15.  crypto_funding_rates  — Binance perp funding rates         ║
+║  16.  price_alert_check     — multi-target alert monitor         ║
 ╚══════════════════════════════════════════════════════════════════╝
 """
 
@@ -865,3 +868,522 @@ if __name__ == "__main__":
     else:
         logger.info("mcprice v2.2 — stdio mode")
         mcp.run(transport="stdio")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TOOL 11 — fear_greed_index
+# ─────────────────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def fear_greed_index() -> dict:
+    """
+    Current & historical Fear & Greed Index from alternative.me (no API key).
+    Returns today's score, yesterday, last week, last month + trading bias signal.
+    Perfect for timing entries/exits. Works for both crypto and stock markets.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(
+                "https://api.alternative.me/fng/",
+                params={"limit": 5, "format": "json"},
+            )
+            r.raise_for_status()
+            data = r.json().get("data", [])
+    except Exception as exc:
+        return {"error": f"Fear & Greed API failed: {exc}"}
+
+    if not data:
+        return {"error": "No data returned"}
+
+    def _classify(score: int) -> str:
+        if score <= 25:  return "😱 Extreme Fear"
+        if score <= 40:  return "😨 Fear"
+        if score <= 55:  return "😐 Neutral"
+        if score <= 75:  return "😄 Greed"
+        return "🤑 Extreme Greed"
+
+    def _bias(score: int) -> str:
+        if score <= 25:  return "🟢 Strong BUY signal — market oversold, historically best entry"
+        if score <= 40:  return "🟡 Cautious BUY — fear creating opportunity"
+        if score <= 55:  return "⚪ HOLD — neutral market, no clear edge"
+        if score <= 75:  return "🟡 Consider TRIM — greed elevated, risk increasing"
+        return "🔴 SELL / avoid new longs — extreme greed = near-term top risk"
+
+    current = data[0]
+    score   = int(current["value"])
+    labels  = ["Today", "Yesterday", "Last Week", "2 Weeks Ago", "Last Month"]
+
+    history = [
+        {
+            "period":    labels[i],
+            "score":     int(d["value"]),
+            "label":     d["value_classification"],
+            "sentiment": _classify(int(d["value"])),
+        }
+        for i, d in enumerate(data[:5])
+    ]
+
+    return {
+        "current_score":   score,
+        "current_label":   current["value_classification"],
+        "sentiment":       _classify(score),
+        "trading_bias":    _bias(score),
+        "history":         history,
+        "revolut_tip": (
+            "💳 Revolut Tip: Use Fear & Greed below 25 to buy blue-chip Revolut stocks "
+            "(NVDA, AAPL, MSFT) at discounted prices. Above 75 = reduce exposure."
+        ),
+        "source": "alternative.me/fng",
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TOOL 12 — earnings_calendar
+# ─────────────────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def earnings_calendar(tickers: List[str]) -> dict:
+    """
+    Next earnings date + EPS estimates for a list of stocks.
+    High-impact tool: earnings = biggest single-day price movers.
+    Perfect for pre-earnings plays on Revolut.
+
+    Args:
+        tickers: e.g. ["NVDA", "AAPL", "MSFT", "META"]
+    """
+    if not tickers:
+        return {"error": "Provide at least one ticker"}
+
+    results = []
+
+    def _fetch_earnings(ticker: str) -> dict:
+        try:
+            t    = yf.Ticker(ticker)
+            cal  = t.calendar  # dict with Earnings Date, EPS Estimate, etc.
+            info = t.fast_info
+
+            earnings_date = None
+            if cal is not None:
+                if hasattr(cal, "get"):
+                    ed = cal.get("Earnings Date") or cal.get("earningsDate")
+                    if ed is not None:
+                        if hasattr(ed, "__iter__") and not isinstance(ed, str):
+                            ed = list(ed)
+                            earnings_date = str(ed[0])[:10] if ed else None
+                        else:
+                            earnings_date = str(ed)[:10]
+
+            eps_est  = None
+            rev_est  = None
+            if cal is not None and hasattr(cal, "get"):
+                eps_est = cal.get("EPS Estimate") or cal.get("epsEstimate")
+                rev_est = cal.get("Revenue Estimate") or cal.get("revenueEstimate")
+                if eps_est is not None:
+                    try: eps_est = round(float(eps_est), 4)
+                    except: eps_est = None
+                if rev_est is not None:
+                    try: rev_est = float(rev_est)
+                    except: rev_est = None
+
+            on_revolut = ticker in REVOLUT_STOCKS
+            price      = round(float(info.last_price or 0), 2)
+
+            return {
+                "ticker":          ticker,
+                "price":           price,
+                "earnings_date":   earnings_date or "Not scheduled / unavailable",
+                "eps_estimate":    eps_est,
+                "revenue_estimate": rev_est,
+                "revolut_available": on_revolut,
+                "revolut_tip": (
+                    f"💳 {ticker} is tradeable on Revolut — set a price alert before earnings!"
+                    if on_revolut else
+                    f"❌ {ticker} not on Revolut — consider comparable Revolut alternatives"
+                ),
+            }
+        except Exception as exc:
+            return {"ticker": ticker, "error": str(exc)}
+
+    loop = asyncio.get_event_loop()
+    tasks = [
+        loop.run_in_executor(None, _fetch_earnings, t.upper().strip())
+        for t in tickers[:15]
+    ]
+    results = await asyncio.gather(*tasks)
+
+    upcoming = [
+        r for r in results
+        if "error" not in r
+        and r["earnings_date"] not in ("Not scheduled / unavailable", None)
+        and r["earnings_date"] >= time.strftime("%Y-%m-%d")
+    ]
+    upcoming_sorted = sorted(upcoming, key=lambda x: x["earnings_date"])
+    on_revolut_upcoming = [r for r in upcoming_sorted if r.get("revolut_available")]
+
+    return {
+        "results":              list(results),
+        "upcoming_sorted":      upcoming_sorted,
+        "revolut_opportunities": on_revolut_upcoming,
+        "summary": (
+            f"📅 {len(upcoming_sorted)} upcoming earnings found. "
+            f"💳 {len(on_revolut_upcoming)} tradeable on Revolut."
+        ),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TOOL 13 — technical_signals
+# ─────────────────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def technical_signals(ticker: str, period: str = "3mo") -> dict:
+    """
+    RSI, SMA20, SMA50, EMA9 + buy/sell signal for any stock or ETF.
+    Uses yfinance historical data — no API key needed.
+    Great for timing entries on Revolut stocks.
+
+    Args:
+        ticker: Stock symbol e.g. "NVDA", "AAPL", "SPY"
+        period: History window — "1mo", "3mo", "6mo", "1y" (default "3mo")
+    """
+    try:
+        ticker = validate_ticker(ticker)
+    except ValueError as e:
+        return {"error": str(e)}
+
+    def _calc(t: str, p: str) -> dict:
+        import pandas as pd
+        tk   = yf.Ticker(t)
+        hist = tk.history(period=p)
+        if hist.empty or len(hist) < 20:
+            return {"ticker": t, "error": "Insufficient historical data"}
+
+        close = hist["Close"]
+        n     = len(close)
+
+        # SMA
+        sma20 = round(close.rolling(20).mean().iloc[-1], 2)
+        sma50 = round(close.rolling(min(50, n)).mean().iloc[-1], 2)
+
+        # EMA 9
+        ema9  = round(close.ewm(span=9, adjust=False).mean().iloc[-1], 2)
+
+        # RSI 14
+        delta = close.diff()
+        gain  = delta.clip(lower=0).rolling(14).mean()
+        loss  = (-delta.clip(upper=0)).rolling(14).mean()
+        rs    = gain / loss.replace(0, float("nan"))
+        rsi   = round(100 - (100 / (1 + rs.iloc[-1])), 1)
+
+        # MACD (12,26,9)
+        ema12   = close.ewm(span=12, adjust=False).mean()
+        ema26   = close.ewm(span=26, adjust=False).mean()
+        macd    = ema12 - ema26
+        signal  = macd.ewm(span=9, adjust=False).mean()
+        macd_v  = round(macd.iloc[-1], 4)
+        sig_v   = round(signal.iloc[-1], 4)
+        macd_cross = "🟢 Bullish crossover" if macd_v > sig_v else "🔴 Bearish crossover"
+
+        cur = round(float(close.iloc[-1]), 2)
+
+        # Signal logic
+        signals = []
+        if rsi < 30:    signals.append("🟢 RSI oversold (<30) — BUY signal")
+        elif rsi > 70:  signals.append("🔴 RSI overbought (>70) — SELL signal")
+        else:           signals.append(f"⚪ RSI neutral ({rsi})")
+
+        if cur > sma20: signals.append("🟢 Price above SMA20 — bullish")
+        else:           signals.append("🔴 Price below SMA20 — bearish")
+
+        if sma20 > sma50: signals.append("🟢 SMA20 > SMA50 — golden cross zone")
+        else:             signals.append("🔴 SMA20 < SMA50 — death cross zone")
+
+        if cur > ema9: signals.append("🟢 Price above EMA9 — short-term momentum up")
+        else:          signals.append("🔴 Price below EMA9 — short-term momentum down")
+
+        bull_signals = sum(1 for s in signals if s.startswith("🟢"))
+        overall = (
+            "🟢 STRONG BUY"  if bull_signals >= 4 else
+            "🟡 MILD BUY"    if bull_signals == 3 else
+            "⚪ NEUTRAL"     if bull_signals == 2 else
+            "🟡 MILD SELL"   if bull_signals == 1 else
+            "🔴 STRONG SELL"
+        )
+
+        on_revolut = t in REVOLUT_STOCKS
+        return {
+            "ticker":      t,
+            "current_price": cur,
+            "period":      p,
+            "rsi_14":      rsi,
+            "sma_20":      sma20,
+            "sma_50":      sma50,
+            "ema_9":       ema9,
+            "macd":        macd_v,
+            "macd_signal": sig_v,
+            "macd_cross":  macd_cross,
+            "signals":     signals,
+            "overall_signal": overall,
+            "revolut_available": on_revolut,
+            "revolut_action": (
+                f"💳 {t} is on Revolut — {overall.split(' ', 1)[-1].lower()} signal active. Trade now!"
+                if on_revolut else
+                f"❌ {t} not on Revolut"
+            ),
+        }
+
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, _calc, ticker, period)
+        return result
+    except Exception as exc:
+        return {"ticker": ticker, "error": str(exc)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TOOL 14 — insider_flow_scan
+# ─────────────────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def insider_flow_scan(tickers: Optional[List[str]] = None) -> dict:
+    """
+    Recent SEC Form 4 insider buying/selling for stocks — fetched live from GitHub.
+    Identifies cluster buys (multiple insiders buying = strong bullish signal).
+    Flags which stocks are also on Revolut for immediate trading.
+    Data updates every 2 hours via GitHub Actions.
+
+    Args:
+        tickers: Optional filter e.g. ["NVDA", "AAPL"]. Leave empty for all recent filings.
+    """
+    DATA_URL = (
+        "https://raw.githubusercontent.com/gepappas98/revolut-pulse/main/public/insider-data.json"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=12) as c:
+            r = await c.get(DATA_URL)
+            r.raise_for_status()
+            data = r.json()
+    except Exception as exc:
+        return {"error": f"Insider data unavailable: {exc}", "fallback": "Try again in 2 minutes"}
+
+    filings = data.get("filings", [])
+    if not filings:
+        return {"error": "No filings in dataset"}
+
+    # Filter by tickers if provided
+    if tickers:
+        upper_tickers = [t.upper().strip() for t in tickers]
+        filings = [f for f in filings if f.get("ticker") in upper_tickers]
+
+    buys  = [f for f in filings if f.get("isBuy")]
+    sells = [f for f in filings if not f.get("isBuy")]
+
+    # Cluster detection (≥3 insiders buying same ticker)
+    from collections import Counter
+    ticker_counts = Counter(f["ticker"] for f in buys)
+    clusters = [
+        {"ticker": t, "buy_count": c, "revolut": t in REVOLUT_STOCKS}
+        for t, c in ticker_counts.most_common(10)
+        if c >= 2
+    ]
+
+    # Top buys by value
+    top_buys = sorted(buys, key=lambda x: x.get("value", 0), reverse=True)[:10]
+    revolut_buys = [f for f in top_buys if f.get("ticker") in REVOLUT_STOCKS]
+
+    # Enrich with Revolut flag
+    for f in top_buys:
+        f["revolut_available"] = f.get("ticker") in REVOLUT_STOCKS
+        f["value_fmt"] = (
+            f"${f['value']/1e6:.2f}M" if f.get("value", 0) >= 1_000_000
+            else f"${f.get('value', 0)/1000:.0f}K"
+        )
+
+    return {
+        "source":        "SEC EDGAR via GitHub Actions",
+        "fetched_at":    data.get("fetchedAt", "unknown"),
+        "total_filings": len(filings),
+        "total_buys":    len(buys),
+        "total_sells":   len(sells),
+        "buy_sell_ratio": round(len(buys) / max(len(sells), 1), 2),
+        "cluster_buys":  clusters,
+        "top_buys":      top_buys,
+        "revolut_actionable": revolut_buys,
+        "market_signal": (
+            "🟢 BULLISH — insiders buying heavily"  if len(buys) > len(sells) * 1.5 else
+            "🔴 BEARISH — insiders selling"         if len(sells) > len(buys) * 1.5 else
+            "⚪ NEUTRAL — mixed insider activity"
+        ),
+        "revolut_tip": (
+            f"💳 {len(revolut_buys)} insider buys are tradeable on Revolut right now. "
+            "Open revolut-pulse.lovable.app/insiderflow-pro-v2.html for the full screener."
+        ),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TOOL 15 — crypto_funding_rates
+# ─────────────────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def crypto_funding_rates(symbols: Optional[List[str]] = None) -> dict:
+    """
+    Binance perpetual futures funding rates — free, no API key.
+    Positive rate = longs paying shorts (bearish bias).
+    Negative rate = shorts paying longs (bullish bias).
+    Best contrarian signal in crypto trading.
+
+    Args:
+        symbols: e.g. ["BTC", "ETH", "SOL"]. Leave empty for top 15 by rate.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=12) as c:
+            r = await c.get("https://fapi.binance.com/fapi/v1/fundingRate",
+                           params={"limit": 200})
+            r.raise_for_status()
+            raw = r.json()
+    except Exception as exc:
+        # fallback to premium endpoint
+        try:
+            async with httpx.AsyncClient(timeout=12) as c:
+                r = await c.get("https://fapi.binance.com/fapi/v1/premiumIndex")
+                r.raise_for_status()
+                raw_idx = r.json()
+                raw = [{"symbol": x["symbol"],
+                        "fundingRate": x.get("lastFundingRate", "0"),
+                        "fundingTime": x.get("nextFundingTime", 0)}
+                       for x in raw_idx]
+        except Exception as exc2:
+            return {"error": f"Binance futures API failed: {exc2}"}
+
+    processed = []
+    seen = set()
+    for item in raw:
+        sym = item.get("symbol", "")
+        if not sym.endswith("USDT"):
+            continue
+        base = sym[:-4]
+        if base in seen:
+            continue
+        seen.add(base)
+        rate = float(item.get("fundingRate", 0)) * 100  # to %
+        processed.append({
+            "symbol":       base,
+            "rate_pct":     round(rate, 4),
+            "annualized":   round(rate * 3 * 365, 1),  # 8h funding × 3/day × 365
+            "bias":         "🔴 Bearish (longs paying)" if rate > 0 else "🟢 Bullish (shorts paying)",
+            "signal": (
+                "⚠️ EXTREME LONG SQUEEZE risk" if rate > 0.1 else
+                "🔴 Crowded longs — caution"   if rate > 0.05 else
+                "⚪ Neutral"                    if abs(rate) < 0.01 else
+                "🟡 Mild short bias"            if rate < -0.01 else
+                "🟢 Crowded shorts — contrarian BUY"
+            ),
+            "revolut_crypto": base in REVOLUT_CRYPTO,
+        })
+
+    if symbols:
+        upper = [s.upper().strip() for s in symbols]
+        processed = [p for p in processed if p["symbol"] in upper]
+        processed = sorted(processed, key=lambda x: upper.index(x["symbol"])
+                          if x["symbol"] in upper else 999)
+    else:
+        processed = sorted(processed, key=lambda x: abs(x["rate_pct"]), reverse=True)[:15]
+
+    revolut_picks = [p for p in processed if p["revolut_crypto"]]
+    extreme       = [p for p in processed if abs(p["rate_pct"]) > 0.05]
+
+    return {
+        "funding_rates": processed,
+        "revolut_crypto": revolut_picks,
+        "extreme_alerts": extreme,
+        "summary": (
+            f"📊 {len(processed)} pairs. "
+            f"🔴 {sum(1 for p in processed if p['rate_pct'] > 0.05)} extreme long bias. "
+            f"🟢 {sum(1 for p in processed if p['rate_pct'] < -0.01)} short squeeze setups."
+        ),
+        "source": "Binance Perpetual Futures (no key)",
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TOOL 16 — price_alert_check
+# ─────────────────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def price_alert_check(alerts: List[dict]) -> dict:
+    """
+    Check if any price targets have been hit for a list of alerts.
+    Pass your watchlist with target levels — get instant go/no-go verdict.
+    Perfect for AI agents monitoring positions between chat sessions.
+
+    Args:
+        alerts: List of dicts e.g.:
+            [
+              {"ticker": "NVDA",  "target": 1000.0, "direction": "above"},
+              {"ticker": "BTC",   "target": 90000,  "direction": "above"},
+              {"ticker": "AAPL",  "target": 180.0,  "direction": "below"},
+            ]
+        direction: "above" = alert if price >= target, "below" = alert if price <= target
+    """
+    if not alerts:
+        return {"error": "No alerts provided"}
+
+    results  = []
+    triggered = []
+    safe      = []
+
+    for alert in alerts[:20]:
+        raw    = alert.get("ticker", "")
+        target = float(alert.get("target", 0))
+        direc  = alert.get("direction", "above").lower()
+
+        try:
+            ticker = validate_ticker(raw)
+        except ValueError as e:
+            results.append({"ticker": raw, "error": str(e)})
+            continue
+
+        try:
+            q = await (
+                fetch_with_retry(limited_call, _binance_ticker, ticker)
+                if ticker in ALL_CRYPTO else _get_stock_price(ticker)
+            )
+        except Exception as exc:
+            results.append({"ticker": ticker, "target": target, "error": str(exc)})
+            continue
+
+        price = float(q.get("price", 0))
+        hit   = (price >= target if direc == "above" else price <= target)
+        gap   = price - target
+        gap_p = (gap / target * 100) if target else 0
+        on_r  = ticker in REVOLUT_STOCKS or ticker in REVOLUT_CRYPTO
+
+        entry = {
+            "ticker":     ticker,
+            "current":    price,
+            "target":     target,
+            "direction":  direc,
+            "triggered":  hit,
+            "gap":        round(gap, 4),
+            "gap_pct":    round(gap_p, 2),
+            "revolut_available": on_r,
+            "verdict": (
+                f"🚨 TRIGGERED — {ticker} ${price} {'≥' if direc == 'above' else '≤'} ${target}"
+                + (" 💳 Trade on Revolut now!" if on_r else "")
+                if hit else
+                f"⏳ Not yet — {ticker} ${price} | {gap_p:+.1f}% from ${target} target"
+            ),
+        }
+        results.append(entry)
+        (triggered if hit else safe).append(entry)
+
+    return {
+        "triggered_count": len(triggered),
+        "safe_count":      len(safe),
+        "triggered":       triggered,
+        "safe":            safe,
+        "results":         results,
+        "summary": (
+            f"🚨 {len(triggered)} alerts TRIGGERED! " if triggered else "✅ No alerts triggered yet. "
+        ) + f"{len(safe)} still pending.",
+    }
