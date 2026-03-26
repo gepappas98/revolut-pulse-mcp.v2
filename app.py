@@ -61,6 +61,11 @@ except Exception as e:
     print(f"⚠️  Could not set yfinance cache: {e}")
 # ================================================
 
+# === MCP Server Imports ===
+from fastmcp import FastMCP
+from starlette.middleware.base import BaseHTTPMiddleware
+# ==================================
+
 # ─────────────────────────────────────────────────────────────────────────────
 # LOGGING
 # ─────────────────────────────────────────────────────────────────────────────
