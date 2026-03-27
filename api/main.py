@@ -1,22 +1,18 @@
 #!/usr/bin/env python3
 """
 ╔══════════════════════════════════════════════════════════════════╗
-║              mcprice — FastAPI HTTP Layer  v3.0                  ║
+║              mcprice — FastAPI HTTP Layer  v5.0                  ║
 ║                                                                  ║
-║  Exposes the same logic as the MCP server over plain HTTP.       ║
-║  Useful for:                                                     ║
-║    • Programmatic SEO pages                                      ║
-║    • Browser / JS frontends                                      ║
-║    • Webhook integrations                                        ║
-║    • Direct REST calls without MCP client                        ║
+║  Exposes all 25 MCP tools over plain HTTP.                       ║
+║  Stocks via yfinance · Crypto via Binance                        ║
+║  No API key required for any endpoint.                           ║
 ║                                                                  ║
-║  v3.0 new endpoints (+6):                                        ║
-║    GET /fear-greed           — Fear & Greed index + bias         ║
-║    GET /earnings             — Next earnings + EPS estimates      ║
-║    GET /signals/{ticker}     — RSI/SMA/EMA/MACD signal engine    ║
-║    GET /insider-flow         — SEC Form 4 cluster buy scan       ║
-║    GET /funding-rates        — Binance perp funding rates        ║
-║    POST /alert-check         — Multi-ticker price alert monitor  ║
+║  v5.0 new endpoints from Skills conversion (+5):                 ║
+║    GET  /correlation        — 4-mode correlation engine          ║
+║    POST /options/analysis   — Black-Scholes payoff + Greeks      ║
+║    GET  /geopolitical/energy— Hormuz Monitor + oil signals       ║
+║    GET  /fundamentals/{t}   — Income/balance/analysts/insiders   ║
+║    GET  /options/chain/{t}  — Live IV surface + OI + max pain    ║
 ║                                                                  ║
 ║  Run:                                                            ║
 ║    uvicorn api.main:app --reload --port 8001                     ║
@@ -141,13 +137,14 @@ def _arrow(chg: float) -> str:
 
 # ─── FastAPI app ──────────────────────────────────────────────────────────────
 app = FastAPI(
-    title="mcprice API v4",
+    title="mcprice API v5",
     description=(
-        "Real-time stock & crypto prices. 20 endpoints. No API key required. "
-        "Stocks via yfinance, crypto via Binance. "
-        "Fear & Greed · Technical Signals · Insider Flow · Earnings · Funding Rates."
+        "Real-time financial intelligence. 25 endpoints. No API key required. "
+        "Stocks via yfinance · Crypto via Binance · Options via yfinance · "
+        "Fear & Greed · Technical Signals · Insider Flow · Earnings · Funding Rates · "
+        "Stock Correlation · Options Analysis · Fundamentals · Geopolitical Energy Risk."
     ),
-    version="4.0.0",
+    version="5.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -850,3 +847,652 @@ async def news_sentiment(body: SentimentRequest):
         "overall":  "🟢 Bullish" if avg > 0.15 else ("🔴 Bearish" if avg < -0.15 else "⚪ Neutral"),
         "method": "keyword-lexicon (FinBERT-distilled)",
     }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# v5.0 — NEW REST ENDPOINTS (Tools 21–25 from Skills conversion)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─── /correlation — stock_correlation (Tool 21) ──────────────────────────────
+
+@app.get("/correlation", tags=["Analytics v5"])
+async def correlation(
+    tickers: str  = Query(..., description="Comma-separated e.g. NVDA,AMD or just NVDA for discover mode"),
+    mode:    str  = Query("discover", description="discover | pair | cluster | rolling"),
+    period:  str  = Query("1y",       description="1y | 2y | 6mo | 3mo"),
+):
+    """
+    Stock correlation engine — 4 modes:
+    - discover: find top correlated peers for 1 ticker + Revolut sympathy plays
+    - pair:     deep pairwise analysis (Pearson, beta, R², spread Z-score, pair trade signal)
+    - cluster:  full correlation matrix for 3–15 tickers (diversifiers, clusters)
+    - rolling:  rolling 20/60/120d windows + regime-conditional (crisis amplification)
+
+    No API key. Powered by yfinance.
+    """
+    import numpy as np, pandas as pd, math
+
+    mode_lc = mode.lower().strip()
+    if mode_lc not in ("discover", "pair", "cluster", "rolling"):
+        raise HTTPException(400, detail=f"Unknown mode. Use: discover | pair | cluster | rolling")
+
+    tkrs = [t.strip().upper() for t in tickers.split(",") if t.strip()][:15]
+    if not tkrs:
+        raise HTTPException(400, detail="Provide at least one ticker")
+
+    loop = asyncio.get_running_loop()
+
+    def _arrow_corr(c: float) -> str:
+        if c >= 0.80: return "Very strong co-move 🔴"
+        if c >= 0.60: return "Strong co-move 🟠"
+        if c >= 0.40: return "Moderate 🟡"
+        if c >= 0.20: return "Weak ⚪"
+        if c >= -0.20: return "Near-zero ➡️"
+        return "Inverse / hedge candidate 🟢"
+
+    # ── DISCOVER ─────────────────────────────────────────────────────────────
+    if mode_lc == "discover":
+        target = tkrs[0]
+        SECTOR_MAP = {
+            "Technology":        ["NVDA","AMD","AVGO","INTC","QCOM","TSM","ASML","MU","MSFT","AAPL","GOOGL","META","LRCX","AMAT"],
+            "Financial Services":["JPM","BAC","GS","MS","V","MA","BLK","SCHW","AXP","WFC"],
+            "Healthcare":        ["JNJ","PFE","LLY","ABBV","MRK","AMGN","GILD","UNH","MRNA"],
+            "Energy":            ["XOM","CVX","COP","OXY","SLB","HAL","XLE"],
+            "Industrials":       ["LMT","RTX","BA","GD","NOC","LHX","HON","CAT"],
+            "Consumer Cyclical": ["AMZN","TSLA","NKE","MCD","SBUX","HD","WMT"],
+        }
+
+        def _calc():
+            import yfinance as yf
+            info = {}
+            try: info = yf.Ticker(target).info
+            except: pass
+            sector = info.get("sector","Technology")
+            peers  = SECTOR_MAP.get(sector, SECTOR_MAP["Technology"])
+            peers  = [t for t in dict.fromkeys(peers) if t != target][:18]
+            all_t  = [target] + peers
+
+            data = yf.download(all_t, period=period, auto_adjust=True, progress=False)
+            closes = data["Close"] if isinstance(data.columns, pd.MultiIndex) else data
+            closes = closes.dropna(axis=1, thresh=max(20, len(data)//3))
+            returns = np.log(closes / closes.shift(1)).dropna()
+            if target not in returns.columns:
+                return {"error": f"No data for {target}"}
+            corr_s = returns.corr()[target].drop(target, errors="ignore")
+            ranked = corr_s.abs().sort_values(ascending=False)
+            out = []
+            for tkr in ranked.index[:10]:
+                c = float(corr_s[tkr])
+                out.append({
+                    "ticker": tkr, "correlation": round(c,4),
+                    "abs_corr": round(abs(c),4), "strength": _arrow_corr(c),
+                    "revolut": tkr in REVOLUT_STOCKS,
+                })
+            return {"target": target, "period": period, "top_correlated": out,
+                    "revolut_picks": [x for x in out if x["revolut"]][:5],
+                    "sympathy_plays": [x["ticker"] for x in out if x["correlation"]>0.6][:3],
+                    "hedge_candidates": [x["ticker"] for x in out if x["correlation"]<-0.3],
+                    "note": "Correlation ≠ causation. Past correlations may not persist."}
+
+        try:
+            return await loop.run_in_executor(None, _calc)
+        except Exception as e:
+            raise HTTPException(502, detail=str(e))
+
+    # ── PAIR ──────────────────────────────────────────────────────────────────
+    if mode_lc == "pair":
+        if len(tkrs) < 2:
+            raise HTTPException(400, detail="Provide 2 tickers for pair mode")
+        ta, tb = tkrs[0], tkrs[1]
+
+        def _calc_pair():
+            import yfinance as yf
+            data = yf.download([ta,tb], period=period, auto_adjust=True, progress=False)
+            closes = data["Close"][[ta,tb]].dropna() if isinstance(data.columns, pd.MultiIndex) else data.dropna()
+            rets = np.log(closes/closes.shift(1)).dropna()
+            if ta not in rets.columns or tb not in rets.columns:
+                return {"error": "Insufficient data"}
+            corr = float(rets[ta].corr(rets[tb]))
+            cov  = rets.cov()
+            beta = float(cov.loc[tb,ta]/cov.loc[ta,ta]) if cov.loc[ta,ta]!=0 else 0
+            roll = rets[ta].rolling(60).corr(rets[tb])
+            spread  = np.log(closes[ta]/closes[tb])
+            z_score = float((spread-spread.mean())/spread.std()) if spread.std()!=0 else 0
+            return {
+                "ticker_a": ta, "ticker_b": tb, "period": period,
+                "correlation": round(corr,4), "r_squared": round(corr**2,4),
+                "beta_b_vs_a": round(beta,4),
+                "rolling_60d": {"current": round(float(roll.iloc[-1]),4), "mean": round(float(roll.mean()),4),
+                                "std": round(float(roll.std()),4), "min": round(float(roll.min()),4),
+                                "max": round(float(roll.max()),4)},
+                "spread_z_score": round(z_score,3),
+                "pair_trade": abs(z_score)>2,
+                "action": (f"Long {ta} / Short {tb}" if z_score<-2 else
+                           f"Long {tb} / Short {ta}" if z_score>2 else "Spread in range — no trade"),
+                "interpretation": _arrow_corr(corr),
+                "revolut_a": ta in REVOLUT_STOCKS, "revolut_b": tb in REVOLUT_STOCKS,
+                "observations": len(rets),
+            }
+        try:
+            return await loop.run_in_executor(None, _calc_pair)
+        except Exception as e:
+            raise HTTPException(502, detail=str(e))
+
+    # ── CLUSTER ───────────────────────────────────────────────────────────────
+    if mode_lc == "cluster":
+        if len(tkrs) < 3:
+            raise HTTPException(400, detail="Provide 3+ tickers for cluster mode")
+
+        def _calc_cluster():
+            import yfinance as yf
+            data = yf.download(tkrs, period=period, auto_adjust=True, progress=False)
+            closes = data["Close"].dropna(axis=1, thresh=max(20,len(data)//3)) if isinstance(data.columns,pd.MultiIndex) else data.dropna()
+            rets = np.log(closes/closes.shift(1)).dropna()
+            corr_m = rets.corr()
+            pairs = []
+            cols = list(corr_m.columns)
+            for i in range(len(cols)):
+                for j in range(i+1,len(cols)):
+                    pairs.append({"a":cols[i],"b":cols[j],"corr":round(float(corr_m.iloc[i,j]),4)})
+            pairs.sort(key=lambda x: abs(x["corr"]), reverse=True)
+            avg_corr = {t: round(float(corr_m[t].drop(t).abs().mean()),4) for t in cols}
+            return {
+                "tickers": tkrs, "period": period,
+                "top_pairs":  pairs[:5],
+                "weak_pairs": pairs[-5:],
+                "avg_corr_per_ticker": avg_corr,
+                "diversifiers":    sorted(avg_corr.items(),key=lambda x:x[1])[:3],
+                "most_connected":  sorted(avg_corr.items(),key=lambda x:x[1],reverse=True)[:3],
+                "revolut_available": {t: t in REVOLUT_STOCKS for t in tkrs},
+            }
+        try:
+            return await loop.run_in_executor(None, _calc_cluster)
+        except Exception as e:
+            raise HTTPException(502, detail=str(e))
+
+    # ── ROLLING ───────────────────────────────────────────────────────────────
+    if mode_lc == "rolling":
+        if len(tkrs) < 2:
+            raise HTTPException(400, detail="Provide 2 tickers for rolling mode")
+        ta, tb = tkrs[0], tkrs[1]
+
+        def _calc_rolling():
+            import yfinance as yf
+            data = yf.download([ta,tb], period=period, auto_adjust=True, progress=False)
+            closes = data["Close"][[ta,tb]].dropna() if isinstance(data.columns,pd.MultiIndex) else data.dropna()
+            rets = np.log(closes/closes.shift(1)).dropna()
+            if ta not in rets.columns or tb not in rets.columns:
+                return {"error":"Insufficient data"}
+            windows = {}
+            for w in [20,60,120]:
+                roll = rets[ta].rolling(w).corr(rets[tb]).dropna()
+                windows[f"{w}d"] = {"current":round(float(roll.iloc[-1]),4),"mean":round(float(roll.mean()),4),
+                                    "std":round(float(roll.std()),4),"min":round(float(roll.min()),4),
+                                    "max":round(float(roll.max()),4)}
+            regimes = {}
+            ret_a = rets[ta]
+            for name,mask in [("all_days",pd.Series(True,index=rets.index)),
+                               ("up_days",ret_a>0),("down_days",ret_a<0),
+                               ("high_vol",ret_a.abs()>ret_a.abs().quantile(0.75)),
+                               ("large_drawdown",ret_a<-0.02)]:
+                subset = rets[mask]
+                if len(subset)>=20:
+                    regimes[name]={"corr":round(float(subset[ta].corr(subset[tb])),4),"days":int(mask.sum())}
+            crisis_amp = (regimes.get("large_drawdown",{}).get("corr",0) >
+                          regimes.get("all_days",{}).get("corr",0)+0.1)
+            return {
+                "ticker_a":ta,"ticker_b":tb,"period":period,
+                "rolling_windows":windows,"regime_correlation":regimes,
+                "crisis_amplification": crisis_amp,
+                "key_insight": ("⚠️ Correlation spikes in sell-offs — diversification may fail in crisis"
+                                if crisis_amp else "✅ Stable correlation across regimes"),
+                "revolut_a":ta in REVOLUT_STOCKS,"revolut_b":tb in REVOLUT_STOCKS,
+            }
+        try:
+            return await loop.run_in_executor(None, _calc_rolling)
+        except Exception as e:
+            raise HTTPException(502, detail=str(e))
+
+
+# ─── /options/analysis — options_analysis (Tool 22) ──────────────────────────
+
+class OptionsRequest(BaseModel):
+    strategy:        str
+    underlying:      str
+    spot:            float
+    strikes:         List[float]
+    premium:         float
+    dte:             int   = 30
+    iv:              float = 0.20
+    quantity:        int   = 1
+    multiplier:      int   = 100
+    risk_free_rate:  float = 0.043
+
+@app.post("/options/analysis", tags=["Analytics v5"])
+async def options_analysis_endpoint(body: OptionsRequest):
+    """
+    Black-Scholes options payoff analysis — returns JSON payoff curve, Greeks, breakevens.
+    Supports: butterfly | vertical_spread | iron_condor | straddle | strangle | covered_call | naked_put
+
+    POST body example (bull call spread):
+    {
+      "strategy": "vertical_spread",
+      "underlying": "NVDA",
+      "spot": 880.0,
+      "strikes": [860.0, 920.0],
+      "premium": 18.50,
+      "dte": 21,
+      "iv": 0.42
+    }
+    """
+    import math
+
+    def norm_cdf(x):
+        if x<-8: return 0.0
+        if x>8:  return 1.0
+        t = 1/(1+0.2316419*abs(x))
+        p = 1-(1/math.sqrt(2*math.pi))*math.exp(-0.5*x*x)*t*(0.319381530+t*(-0.356563782+t*(1.781477937+t*(-1.821255978+t*1.330274429))))
+        return p if x>=0 else 1-p
+
+    def bs_call(S,K,T,r,sig):
+        if T<=0: return max(S-K,0)
+        d1=(math.log(S/K)+(r+0.5*sig**2)*T)/(sig*math.sqrt(T)); d2=d1-sig*math.sqrt(T)
+        return S*norm_cdf(d1)-K*math.exp(-r*T)*norm_cdf(d2)
+
+    def bs_put(S,K,T,r,sig):
+        return bs_call(S,K,T,r,sig)-S+K*math.exp(-r*T)
+
+    def bs_delta(S,K,T,r,sig):
+        if T<=0: return 1.0
+        d1=(math.log(S/K)+(r+0.5*sig**2)*T)/(sig*math.sqrt(T))
+        return norm_cdf(d1)
+
+    T      = body.dte/365.0
+    strat  = body.strategy.lower().strip()
+    strikes= body.strikes
+    spot   = body.spot
+    iv     = body.iv
+    r      = body.risk_free_rate
+    scale  = body.quantity * body.multiplier
+
+    min_s  = min(strikes)*0.80
+    max_s  = max(strikes)*1.20
+    pr     = [round(min_s+(max_s-min_s)*i/20,2) for i in range(21)]
+
+    def exp_pnl(S):
+        if strat=="butterfly":
+            k1,k2,k3=strikes[0],strikes[1],strikes[2]
+            return k3-S if S>=k2 else (S-k1 if S>=k1 else 0) if S<k3 else 0
+        if strat=="vertical_spread":
+            return max(S-strikes[0],0)-max(S-strikes[1],0)
+        if strat=="iron_condor":
+            k1,k2,k3,k4=(strikes+[strikes[-1]+1])[:4]
+            return -(max(k2-S,0)-max(k1-S,0)+max(S-k3,0)-max(S-k4,0))
+        if strat=="straddle":
+            return max(S-strikes[0],0)+max(strikes[0]-S,0)
+        if strat=="strangle":
+            return max(strikes[0]-S,0)+max(S-strikes[1],0)
+        if strat=="covered_call":
+            return S-spot-max(S-strikes[0],0)
+        if strat=="naked_put":
+            return -max(strikes[0]-S,0)
+        return 0
+
+    def theory_pnl(S):
+        if strat=="butterfly":
+            k1,k2,k3=strikes[0],strikes[1],strikes[2]
+            return bs_put(S,k1,T,r,iv)-2*bs_put(S,k2,T,r,iv)+bs_put(S,k3,T,r,iv)
+        if strat=="vertical_spread":
+            return bs_call(S,strikes[0],T,r,iv)-bs_call(S,strikes[1],T,r,iv)
+        if strat=="straddle":
+            return bs_call(S,strikes[0],T,r,iv)+bs_put(S,strikes[0],T,r,iv)
+        if strat=="strangle":
+            return bs_put(S,strikes[0],T,r,iv)+bs_call(S,strikes[1],T,r,iv)
+        if strat=="naked_put":
+            return -bs_put(S,strikes[0],T,r,iv)
+        if strat=="covered_call":
+            return S-spot-bs_call(S,strikes[0],T,r,iv)
+        return exp_pnl(S)
+
+    ce=[round((exp_pnl(p)-body.premium)*scale,2) for p in pr]
+    ct=[round((theory_pnl(p)-body.premium)*scale,2) for p in pr]
+
+    max_p=max(ce); max_l=min(ce)
+    bes=[]
+    for i in range(len(ce)-1):
+        if ce[i]*ce[i+1]<=0 and ce[i+1]-ce[i]!=0:
+            bes.append(round(pr[i]-ce[i]*(pr[i+1]-pr[i])/(ce[i+1]-ce[i]),2))
+
+    k_c=strikes[len(strikes)//2]
+    on_rev=body.underlying.upper() in REVOLUT_STOCKS
+
+    return {
+        "strategy": strat, "underlying": body.underlying.upper(),
+        "spot": spot, "strikes": strikes, "dte": body.dte,
+        "iv_pct": round(iv*100,1), "premium": body.premium, "scale": scale,
+        "max_profit_usd": max_p, "max_loss_usd": max_l,
+        "breakevens": bes,
+        "current_theory_pnl": round((theory_pnl(spot)-body.premium)*scale,2),
+        "risk_reward_ratio": round(abs(max_p/max_l),2) if max_l!=0 else None,
+        "delta_approx": round(bs_delta(spot,k_c,T,r,iv),4),
+        "payoff_curve": {"prices": pr, "expiry_pnl": ce, "theory_pnl": ct},
+        "revolut_available": on_rev,
+        "revolut_note": (
+            f"💳 {body.underlying.upper()} on Revolut — no options available but use this for directional bias on the stock."
+            if on_rev else f"❌ {body.underlying.upper()} not on Revolut"
+        ),
+        "summary": (f"{strat.replace('_',' ').title()}: max profit ${max_p:+.0f} / "
+                    f"max loss ${max_l:+.0f} / BE: {', '.join(f'${b}' for b in bes) or 'N/A'}"),
+    }
+
+
+# ─── /geopolitical/energy — geopolitical_energy_risk (Tool 23) ───────────────
+
+@app.get("/geopolitical/energy", tags=["Analytics v5"])
+async def geopolitical_energy():
+    """
+    Real-time Strait of Hormuz status — shipping transits, oil prices,
+    stranded vessels, war-risk insurance, diplomatic situation.
+    Returns Revolut energy trade signals: XOM, CVX, OXY, XLE.
+    No API key. Source: hormuzstraitmonitor.com
+    """
+    HORMUZ_API = "https://hormuzstraitmonitor.com/api/dashboard"
+    try:
+        async with httpx.AsyncClient(timeout=12) as c:
+            r = await c.get(HORMUZ_API, headers=HEADERS)
+            r.raise_for_status()
+            payload = r.json()
+    except Exception as exc:
+        raise HTTPException(502, detail=f"Hormuz Monitor unavailable: {exc}")
+
+    if not payload.get("success"):
+        raise HTTPException(502, detail="Hormuz Monitor returned success=false")
+
+    d         = payload.get("data", {})
+    strait    = d.get("straitStatus", {})
+    ships     = d.get("shipCount", {})
+    oil       = d.get("oilPrice", {})
+    stranded  = d.get("strandedVessels", {})
+    insurance = d.get("insurance", {})
+    throughput= d.get("throughput", {})
+    diplomacy = d.get("diplomacy", {})
+    gti       = d.get("globalTradeImpact", {})
+
+    ins_level  = insurance.get("level","normal")
+    pct_normal = ships.get("percentOfNormal",100)
+    brent_chg  = oil.get("changePercent24h",0)
+    risk_emoji = {"normal":"🟢","elevated":"🟡","high":"🔴","critical":"🚨"}.get(ins_level,"⚪")
+
+    ENERGY_TICKERS = [t for t in ["XOM","CVX","COP","OXY","XLE","USO","GLD"] if t in REVOLUT_STOCKS]
+
+    trade_bias = (
+        "🔴 BULLISH oil — consider XOM, CVX, OXY, XLE on Revolut (long energy)" if ins_level in ("high","critical") or pct_normal<80 else
+        "🟡 MILD bullish — monitor XLE/OXY for Revolut entry" if ins_level=="elevated" else
+        "🟢 Normal — no Hormuz premium. Focus on fundamentals."
+    )
+
+    return {
+        "source": "hormuzstraitmonitor.com",
+        "last_updated": d.get("lastUpdated", payload.get("timestamp")),
+        "strait_status": {"status": strait.get("status"), "since": strait.get("since"), "description": strait.get("description")},
+        "ship_traffic": {"current_transits": ships.get("currentTransits"), "last_24h": ships.get("last24h"),
+                         "percent_of_normal": pct_normal,
+                         "signal": "🚨 MAJOR DISRUPTION" if pct_normal<60 else ("🔴 DISRUPTION" if pct_normal<80 else ("🟡 Mild" if pct_normal<95 else "🟢 Normal"))},
+        "oil_price": {"brent_usd": oil.get("brentPrice"), "change_pct_24h": brent_chg,
+                      "trend": "📈 Rising" if brent_chg>0 else "📉 Falling"},
+        "stranded_vessels": {"total": stranded.get("total",0), "tankers": stranded.get("tankers",0),
+                             "change_today": stranded.get("changeToday",0)},
+        "insurance_risk": {"level": ins_level, "emoji": risk_emoji,
+                           "war_risk_pct": insurance.get("warRiskPercent"),
+                           "multiplier": insurance.get("multiplier")},
+        "cargo_throughput": {"percent_normal": throughput.get("percentOfNormal"),
+                             "today_dwt": throughput.get("todayDWT")},
+        "diplomacy": {"status": diplomacy.get("status"), "headline": diplomacy.get("headline")},
+        "global_trade_impact": {"pct_world_oil_at_risk": gti.get("percentOfWorldOilAtRisk"),
+                                "daily_cost_bn_usd": gti.get("estimatedDailyCostBillions"),
+                                "alternative_routes": gti.get("alternativeRoutes",[])},
+        "revolut_energy_signals": {
+            "trade_bias": trade_bias,
+            "revolut_energy_tickers": ENERGY_TICKERS,
+            "suggested_next": ["revolut_sector_scan('energy')", "technical_signals('XLE')", "technical_signals('OXY')"],
+        },
+        "risk_summary": (f"{risk_emoji} {strait.get('status','?')} | Traffic: {pct_normal}% | "
+                         f"Insurance: {ins_level.upper()} | Brent: ${oil.get('brentPrice','?')} ({brent_chg:+.2f}%)"),
+    }
+
+
+# ─── /fundamentals/{ticker} — stock_deep_data (Tool 24) ──────────────────────
+
+@app.get("/fundamentals/{ticker}", tags=["Analytics v5"])
+async def fundamentals(
+    ticker:    str,
+    data_type: str  = Query("overview", description="overview|income|balance|cashflow|analysts|holders|insiders|dividends|news|all"),
+    quarterly: bool = Query(False, description="Use quarterly data (for income/balance/cashflow)"),
+):
+    """
+    Deep fundamental data via yfinance — income statement, balance sheet, cash flow,
+    analyst targets, institutional holders, insider transactions, dividends, news.
+    No API key. Flags Revolut availability.
+
+    data_type options:
+    - overview:  P/E, PEG, beta, sector, market cap, margins, 52w range
+    - income:    Revenue, EPS, net income, EBITDA
+    - balance:   Assets, liabilities, equity, cash
+    - cashflow:  Operating, investing, financing, FCF
+    - analysts:  Price targets + buy/hold/sell counts + upgrades/downgrades
+    - holders:   Institutional + mutual fund holdings
+    - insiders:  SEC Form 4 transactions for this ticker
+    - dividends: Dividend history + yield + payout ratio
+    - news:      Latest 8 news items
+    - all:       Overview + analysts + health score
+    """
+    ticker = ticker.upper().strip()
+    dt     = data_type.lower().strip()
+    valid  = ["overview","income","balance","cashflow","analysts","holders","insiders","dividends","news","all"]
+    if dt not in valid:
+        raise HTTPException(400, detail=f"Unknown data_type. Options: {valid}")
+
+    on_rev = ticker in REVOLUT_STOCKS
+
+    def _fetch():
+        import yfinance as yf, pandas as pd
+
+        tk   = yf.Ticker(ticker)
+        info = tk.info or {}
+        fi   = tk.fast_info
+
+        def _fmt(v):
+            if v is None: return "N/A"
+            try:
+                v=float(v)
+                if v>=1e12: return f"${v/1e12:.2f}T"
+                if v>=1e9:  return f"${v/1e9:.2f}B"
+                if v>=1e6:  return f"${v/1e6:.2f}M"
+                return f"${v:.2f}"
+            except: return str(v)
+
+        def _df(df):
+            if df is None or (hasattr(df,"empty") and df.empty): return []
+            try:
+                if isinstance(df.columns, pd.MultiIndex): df=df.droplevel(0,axis=1)
+                return df.reset_index().head(4).to_dict(orient="records")
+            except: return []
+
+        out = {"ticker": ticker, "revolut_available": on_rev}
+
+        if dt in ("overview","all"):
+            out["overview"] = {
+                "name": info.get("shortName",ticker), "sector": info.get("sector"),
+                "industry": info.get("industry"), "market_cap": _fmt(info.get("marketCap")),
+                "price": round(float(fi.last_price or 0),2),
+                "52w_high": round(float(info.get("fiftyTwoWeekHigh",0) or 0),2),
+                "52w_low":  round(float(info.get("fiftyTwoWeekLow",0) or 0),2),
+                "trailing_pe": round(float(info.get("trailingPE",0) or 0),2),
+                "forward_pe":  round(float(info.get("forwardPE",0) or 0),2),
+                "peg_ratio":   round(float(info.get("pegRatio",0) or 0),2),
+                "beta":        round(float(info.get("beta",0) or 0),2),
+                "dividend_yield": f"{round((info.get('dividendYield') or 0)*100,2)}%",
+                "profit_margin":  f"{round((info.get('profitMargins') or 0)*100,2)}%",
+                "revenue_ttm": _fmt(info.get("totalRevenue")),
+                "ebitda":      _fmt(info.get("ebitda")),
+                "description": (info.get("longBusinessSummary") or "")[:350],
+            }
+        if dt=="income":
+            stmt=tk.quarterly_income_stmt if quarterly else tk.income_stmt
+            out["income_statement"]=_df(stmt.T) if stmt is not None and not stmt.empty else []
+            out["period"]="quarterly" if quarterly else "annual"
+        if dt=="balance":
+            bs=tk.quarterly_balance_sheet if quarterly else tk.balance_sheet
+            out["balance_sheet"]=_df(bs.T) if bs is not None and not bs.empty else []
+            out["period"]="quarterly" if quarterly else "annual"
+        if dt=="cashflow":
+            cf=tk.quarterly_cashflow if quarterly else tk.cashflow
+            out["cashflow"]=_df(cf.T) if cf is not None and not cf.empty else []
+            try:
+                op=float(cf.loc["Operating Cash Flow"].iloc[0]); cap=float(cf.loc["Capital Expenditure"].iloc[0])
+                out["fcf_latest"]=_fmt(op+cap)
+            except: out["fcf_latest"]="N/A"
+        if dt in ("analysts","all"):
+            try:
+                t2=tk.analyst_price_targets
+                out["analyst_targets"]={"current":round(float(t2.get("current",0) or 0),2),
+                    "mean":round(float(t2.get("mean",0) or 0),2),
+                    "high":round(float(t2.get("high",0) or 0),2),
+                    "low":round(float(t2.get("low",0) or 0),2),
+                    "num_analysts":t2.get("numberOfAnalysts")}
+                recs=tk.recommendations
+                if recs is not None and not recs.empty:
+                    l=recs.iloc[0]
+                    out["recommendation"]={"strong_buy":int(l.get("strongBuy",0)),
+                        "buy":int(l.get("buy",0)),"hold":int(l.get("hold",0)),
+                        "sell":int(l.get("sell",0)),"strong_sell":int(l.get("strongSell",0))}
+            except Exception as e: out["analysts_error"]=str(e)
+        if dt=="holders":
+            try:
+                inst=tk.institutional_holders
+                out["institutional_holders"]=_df(inst) if inst is not None else []
+            except Exception as e: out["holders_error"]=str(e)
+        if dt=="insiders":
+            try:
+                ins=tk.insider_transactions
+                out["insider_transactions"]=_df(ins)[:10] if ins is not None else []
+                if ins is not None and not ins.empty:
+                    buys=ins[ins["Shares"]>0]
+                    out["insider_signal"]=("🟢 Net buying" if len(buys)>len(ins)//2 else "🔴 Net selling")
+            except Exception as e: out["insiders_error"]=str(e)
+        if dt=="dividends":
+            try:
+                divs=tk.dividends
+                out["dividend_history"]=[{"date":str(i)[:10],"amount":round(float(v),4)} for i,v in (divs.tail(8).items() if divs is not None and not divs.empty else [])]
+                out["dividend_yield"]=f"{round((info.get('dividendYield') or 0)*100,2)}%"
+                out["payout_ratio"]=f"{round((info.get('payoutRatio') or 0)*100,2)}%"
+            except Exception as e: out["dividends_error"]=str(e)
+        if dt=="news":
+            try:
+                out["news"]=[{"title":n.get("title"),"publisher":n.get("publisher"),"link":n.get("link")} for n in (tk.news or [])[:8]]
+            except Exception as e: out["news_error"]=str(e)
+        if dt=="all":
+            pe=float(info.get("trailingPE",0) or 0); peg=float(info.get("pegRatio",0) or 0); pm=float(info.get("profitMargins",0) or 0)
+            out["health_score"]={"valuation":"cheap" if pe<15 else ("fair" if pe<30 else "expensive"),
+                "growth_adj":"undervalued" if 0<peg<1 else ("fair" if peg<2 else "expensive/no-growth"),
+                "profitability":"high-margin" if pm>0.2 else ("moderate" if pm>0.05 else "thin/loss"),
+                "revolut_verdict":(f"💳 {ticker} on Revolut — " +
+                    ("📈 accumulate" if pe<25 and pm>0.1 else "⏳ monitor")) if on_rev else f"❌ {ticker} not on Revolut"}
+        return out
+
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(None, _fetch)
+    except Exception as e:
+        raise HTTPException(502, detail=str(e))
+
+
+# ─── /options/chain/{ticker} — options_chain (Tool 25) ───────────────────────
+
+@app.get("/options/chain/{ticker}", tags=["Analytics v5"])
+async def options_chain_endpoint(
+    ticker:          str,
+    expiry_index:    int  = Query(0,     description="0=nearest, 1=next, etc."),
+    option_type:     str  = Query("both",description="calls | puts | both"),
+    near_money_only: bool = Query(True,  description="Only show strikes within ±10% of spot"),
+):
+    """
+    Live options chain via yfinance — calls, puts, IV surface, open interest.
+    Includes max pain calculation, put/call OI ratio, IV signal for Revolut timing.
+    No API key required.
+    """
+    ticker = ticker.upper().strip()
+    on_rev = ticker in REVOLUT_STOCKS
+
+    def _fetch():
+        import yfinance as yf, pandas as pd
+
+        tk      = yf.Ticker(ticker)
+        spot    = round(float(tk.fast_info.last_price or 0),2)
+        expiries= tk.options
+        if not expiries:
+            return {"error": f"No options data for {ticker}"}
+
+        idx   = min(expiry_index, len(expiries)-1)
+        exp   = expiries[idx]
+        chain = tk.option_chain(exp)
+
+        def _process(df, otype):
+            if df is None or df.empty: return []
+            df=df.copy()
+            if near_money_only and spot>0:
+                df=df[(df["strike"]>=spot*0.90)&(df["strike"]<=spot*1.10)]
+            out=[]
+            for _,row in df.iterrows():
+                strike=float(row.get("strike",0)); bid=float(row.get("bid",0) or 0)
+                ask=float(row.get("ask",0) or 0); iv=float(row.get("impliedVolatility",0) or 0)
+                oi=int(row.get("openInterest",0) or 0); vol=int(row.get("volume",0) or 0)
+                mono=round((spot-strike)/spot*100,1) if otype=="call" else round((strike-spot)/spot*100,1)
+                out.append({"strike":strike,"type":otype,"bid":round(bid,2),"ask":round(ask,2),
+                    "mid":round((bid+ask)/2,2),"iv_pct":round(iv*100,1),"open_interest":oi,
+                    "volume":vol,"in_the_money":bool(row.get("inTheMoney",False)),
+                    "moneyness_pct":mono,"bid_ask_spread":round(ask-bid,2)})
+            return sorted(out,key=lambda x:x["strike"])
+
+        calls_out=_process(chain.calls,"call") if option_type in ("calls","both") else []
+        puts_out= _process(chain.puts, "put")  if option_type in ("puts","both")  else []
+        all_opts=calls_out+puts_out
+
+        oi_by_s={}
+        for o in all_opts: oi_by_s[o["strike"]]=oi_by_s.get(o["strike"],0)+o["open_interest"]
+        max_pain=max(oi_by_s,key=oi_by_s.get) if oi_by_s else None
+
+        ivs=[o["iv_pct"] for o in all_opts if o["iv_pct"]>0]
+        atm_iv=None
+        for o in sorted(all_opts,key=lambda x:abs(x["strike"]-spot)):
+            if o.get("iv_pct",0)>0: atm_iv=o["iv_pct"]; break
+        avg_iv=round(sum(ivs)/len(ivs),1) if ivs else 0
+        pc_ratio=(round(sum(o["open_interest"] for o in puts_out)/max(sum(o["open_interest"] for o in calls_out),1),2)
+                  if puts_out and calls_out else None)
+        iv_signal=("🔴 High IV — sell strategies favored" if atm_iv and atm_iv>40 else
+                   "🟡 Elevated IV — event priced in" if atm_iv and atm_iv>25 else
+                   "🟢 Low IV — buy strategies favored" if atm_iv else "⚪ No IV data")
+
+        return {
+            "ticker":ticker,"spot":spot,"expiry":exp,"expiry_index":idx,
+            "available_expiries":list(expiries[:6]),"calls":calls_out,"puts":puts_out,
+            "summary":{"total_calls":len(calls_out),"total_puts":len(puts_out),
+                       "max_pain_strike":max_pain,"avg_iv_pct":avg_iv,"atm_iv_pct":atm_iv,
+                       "put_call_oi_ratio":pc_ratio,"iv_signal":iv_signal},
+            "revolut_available":on_rev,
+            "revolut_note":(f"💳 {ticker} on Revolut — IV signal: {'big move expected' if atm_iv and atm_iv>30 else 'steady state'}"
+                           if on_rev else f"❌ {ticker} not on Revolut"),
+        }
+
+    loop=asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(None, _fetch)
+    except Exception as e:
+        raise HTTPException(502, detail=str(e))
+
+
+# ─── Update health + /docs banner ────────────────────────────────────────────
+
+# Override health to reflect v5
+@app.get("/health", tags=["System"], include_in_schema=False)
+async def health_v5():
+    return {"status":"ok","version":"5.0.0","tools":25,"new_in_v5":["correlation","options_analysis","geopolitical_energy","fundamentals","options_chain"]}
