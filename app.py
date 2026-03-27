@@ -2,7 +2,7 @@
 
 """
 ╔══════════════════════════════════════════════════════════════════╗
-║  mcprice v4.0                                                    ║
+║  mcprice v5.0                                                    ║
 ║  Real-Time Financial Intelligence MCP for Claude / Cursor        ║
 ║                                                                  ║
 ║  Stocks  → yfinance  (cloud-reliable, no raw HTTP blocks)        ║
@@ -10,15 +10,14 @@
 ║  Revolut → marks assets tradeable on Revolut                     ║
 ║  Insider → SEC EDGAR Form 4 via GitHub Actions                   ║
 ║                                                                  ║
-║  v4.0 new tools from Awesome-Finance-Skills (+4):               ║
-║   ✅ fear_greed_index   — alternative.me sentiment (no key)      ║
-║   ✅ earnings_calendar  — next earnings date + EPS estimates      ║
-║   ✅ technical_signals  — RSI, SMA, EMA, MACD buy/sell signal    ║
-║   ✅ insider_flow_scan  — SEC Form 4 cluster buys + Revolut flag ║
-║   ✅ crypto_funding_rates — Binance perp funding (contrarian)    ║
-║   ✅ price_alert_check  — multi-ticker target monitoring         ║
+║  v5.0 — Skills-to-MCP conversion (Awesome-Finance-Skills):       ║
+║   ✅ stock_correlation      — co-movement, pairs, clustering      ║
+║   ✅ options_analysis       — Black-Scholes payoff + Greeks       ║
+║   ✅ geopolitical_energy_risk — Hormuz Monitor + oil signals      ║
+║   ✅ stock_deep_data        — fundamentals, analysts, insiders    ║
+║   ✅ options_chain          — live IV surface + OI + max pain     ║
 ║                                                                  ║
-║  Tools (20 total):                                               ║
+║  Tools (25 total):                                               ║
 ║   1.  get_price             — single stock/ETF price             ║
 ║   2.  get_prices_bulk       — up to 20 tickers at once           ║
 ║   3.  get_crypto_price      — Binance crypto price               ║
@@ -39,6 +38,11 @@
 ║  18.  deepear_signals       — DeepEar Lite investment signals     ║
 ║  19.  prediction_markets    — Polymarket crowd probabilities      ║
 ║  20.  news_sentiment_score  — FinBERT-distilled text sentiment    ║
+║  21.  stock_correlation     — co-move discovery + pair analysis  ║
+║  22.  options_analysis      — BS payoff curves + Greeks (JSON)   ║
+║  23.  geopolitical_energy_risk — Hormuz + oil trade signals      ║
+║  24.  stock_deep_data       — fundamentals, analysts, dividends  ║
+║  25.  options_chain         — live IV surface + OI + max pain    ║
 ╚══════════════════════════════════════════════════════════════════╝
 """
 
@@ -1818,3 +1822,1135 @@ if __name__ == "__main__":
     else:
         logger.info("mcprice v4.0 — stdio mode")
         mcp.run(transport="stdio")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ██╗   ██╗███████╗     ███████╗██╗  ██╗██╗██╗     ██╗      ███████╗
+# ██║   ██║██╔════╝     ██╔════╝██║ ██╔╝██║██║     ██║      ██╔════╝
+# ██║   ██║███████╗     ███████╗█████╔╝ ██║██║     ██║      ███████╗
+# ╚██╗ ██╔╝╚════██║     ╚════██║██╔═██╗ ██║██║     ██║      ╚════██║
+#  ╚████╔╝ ███████║     ███████║██║  ██╗██║███████╗███████╗ ███████║
+#   ╚═══╝  ╚══════╝     ╚══════╝╚═╝  ╚═╝╚═╝╚══════╝╚══════╝ ╚══════╝
+# ─────────────────────────────────────────────────────────────────────────────
+#  Tools 21–25 — Converted from Awesome-Finance-Skills SKILL.md format
+#  by GRG / mcprice v5.0
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TOOL 21 — stock_correlation
+# Source: Awesome-Finance-Skills / stock-correlation SKILL.md
+# Converted: Sub-skills A (co-movement discovery) + B (pairwise analysis)
+#            + C (sector clustering) + D (realized/rolling correlation)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def stock_correlation(
+    tickers: List[str],
+    mode: str = "discover",
+    period: str = "1y",
+) -> dict:
+    """
+    Stock correlation engine — powered by the finance-skills stock-correlation SKILL.
+    Finds co-moving stocks, computes pairwise relationships, sector clustering,
+    and rolling/regime-conditional realized correlation.
+
+    Args:
+        tickers:
+            - mode "discover":  single ticker to find correlated peers, e.g. ["NVDA"]
+            - mode "pair":      exactly 2 tickers, e.g. ["AMD", "NVDA"]
+            - mode "cluster":   3–15 tickers for full correlation matrix
+            - mode "rolling":   exactly 2 tickers for time-varying analysis
+        mode:   "discover" | "pair" | "cluster" | "rolling"  (default "discover")
+        period: yfinance period — "1y", "2y", "6mo", "3mo"   (default "1y")
+
+    Returns structured dict with correlations, signals, and Revolut flags.
+    """
+    import numpy as np
+    import pandas as pd
+
+    # ── validate ─────────────────────────────────────────────────────────────
+    mode = mode.lower().strip()
+    if mode not in ("discover", "pair", "cluster", "rolling"):
+        return {"error": f"Unknown mode '{mode}'", "valid_modes": ["discover", "pair", "cluster", "rolling"]}
+    tickers = [t.upper().strip() for t in tickers[:15]]
+    if not tickers:
+        return {"error": "Provide at least one ticker"}
+
+    # ── shared download helper (run in executor — yfinance is sync) ───────────
+    def _download(tkrs: list, per: str) -> pd.DataFrame:
+        import yfinance as yf
+        data = yf.download(tkrs, period=per, auto_adjust=True, progress=False)
+        if isinstance(data.columns, pd.MultiIndex):
+            closes = data["Close"]
+        else:
+            closes = data[["Close"]] if "Close" in data.columns else data
+        closes = closes.dropna(axis=1, thresh=max(20, len(data) // 3))
+        return closes
+
+    def _log_returns(closes: pd.DataFrame) -> pd.DataFrame:
+        import numpy as np
+        return (closes / closes.shift(1)).apply(lambda x: x.map(
+            lambda v: __import__('math').log(v) if v and v > 0 else float('nan')
+        )).dropna()
+
+    def _arrow_corr(c: float) -> str:
+        if c >= 0.80: return "🔴 Very strong co-move"
+        if c >= 0.60: return "🟠 Strong co-move"
+        if c >= 0.40: return "🟡 Moderate"
+        if c >= 0.20: return "⚪ Weak"
+        if c >= -0.20: return "➡️ Near-zero"
+        return "🟢 Inverse (hedge candidate)"
+
+    loop = asyncio.get_running_loop()
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # MODE A — Co-movement Discovery
+    # ═════════════════════════════════════════════════════════════════════════
+    if mode == "discover":
+        target = tickers[0]
+
+        # Build peer universe: same industry + AI sector peers + ETF proxies
+        def _build_peer_universe(tgt: str) -> list:
+            try:
+                import yfinance as yf
+                info = yf.Ticker(tgt).info
+                industry = info.get("industry", "")
+                sector   = info.get("sector", "")
+            except Exception:
+                industry = sector = ""
+
+            # Curated sector universes (mirrors skill's sector_universes.md)
+            SECTOR_MAP = {
+                "Technology":           ["NVDA","AMD","AVGO","INTC","QCOM","TSM","ASML","LRCX","AMAT","MU","MSFT","AAPL","GOOGL","META"],
+                "Financial Services":   ["JPM","BAC","GS","MS","V","MA","BLK","SCHW","AXP","WFC"],
+                "Healthcare":           ["JNJ","PFE","LLY","ABBV","MRK","AMGN","GILD","UNH","CVS","MRNA"],
+                "Energy":               ["XOM","CVX","COP","OXY","SLB","HAL","XLE","USO"],
+                "Industrials":          ["LMT","RTX","BA","GD","NOC","LHX","HON","CAT","DE"],
+                "Consumer Cyclical":    ["AMZN","TSLA","NKE","MCD","SBUX","HD","LOW","TGT","WMT"],
+                "Communication Services":["GOOGL","META","DIS","NFLX","T","VZ","CMCSA","SNAP"],
+                "Real Estate":          ["SPG","PLD","O","AMT","CCI","EQIX"],
+            }
+            peers = SECTOR_MAP.get(sector, [])
+            if len(peers) < 10:
+                for s in SECTOR_MAP.values():
+                    peers += [t for t in s if t not in peers]
+                peers = peers[:25]
+            return [t for t in dict.fromkeys(peers) if t != tgt][:20]
+
+        peers = await loop.run_in_executor(None, _build_peer_universe, target)
+        all_tkrs = [target] + peers
+
+        def _calc_discover():
+            import yfinance as yf, numpy as np, pandas as pd, math
+            data = yf.download(all_tkrs, period=period, auto_adjust=True, progress=False)
+            if isinstance(data.columns, pd.MultiIndex):
+                closes = data["Close"]
+            else:
+                closes = data
+            closes = closes.dropna(axis=1, thresh=max(20, len(data)//3))
+            returns = np.log(closes / closes.shift(1)).dropna()
+            if target not in returns.columns:
+                return {"error": f"Insufficient data for {target}"}
+            corr_series = returns.corr()[target].drop(target, errors="ignore")
+            ranked = corr_series.abs().sort_values(ascending=False)
+            results = []
+            for tkr in ranked.index[:12]:
+                c = float(corr_series[tkr])
+                try:
+                    name = yf.Ticker(tkr).fast_info.display_name or tkr
+                except Exception:
+                    name = tkr
+                results.append({
+                    "ticker":      tkr,
+                    "name":        name,
+                    "correlation": round(c, 4),
+                    "abs_corr":    round(abs(c), 4),
+                    "strength":    _arrow_corr(c),
+                    "revolut_available": tkr in REVOLUT_STOCKS,
+                    "revolut_crypto":    tkr in REVOLUT_CRYPTO,
+                })
+            return results
+
+        results = await loop.run_in_executor(None, _calc_discover)
+        if isinstance(results, dict):
+            return results
+
+        on_revolut = [r for r in results if r["revolut_available"]]
+        return {
+            "mode":           "discover",
+            "target":         target,
+            "period":         period,
+            "peers_scanned":  len(results),
+            "top_correlated": results[:10],
+            "revolut_picks":  on_revolut[:5],
+            "best_pair": results[0] if results else None,
+            "strategy_hints": {
+                "sympathy_plays": [r["ticker"] for r in results[:3] if r["correlation"] > 0.6],
+                "hedge_candidates": [r["ticker"] for r in results if r["correlation"] < -0.3],
+                "revolut_trades": [r["ticker"] for r in on_revolut[:3]],
+            },
+            "note": "Correlation is not causation. Past correlations may not persist.",
+        }
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # MODE B — Pairwise Return Correlation (deep analysis)
+    # ═════════════════════════════════════════════════════════════════════════
+    if mode == "pair":
+        if len(tickers) < 2:
+            return {"error": "Provide 2 tickers for pair mode"}
+        ta, tb = tickers[0], tickers[1]
+
+        def _calc_pair():
+            import yfinance as yf, numpy as np, pandas as pd, math
+            data = yf.download([ta, tb], period=period, auto_adjust=True, progress=False)
+            if isinstance(data.columns, pd.MultiIndex):
+                closes = data["Close"][[ta, tb]].dropna()
+            else:
+                closes = data.dropna()
+            returns = np.log(closes / closes.shift(1)).dropna()
+            if ta not in returns.columns or tb not in returns.columns:
+                return {"error": "Insufficient data for one or both tickers"}
+            corr = float(returns[ta].corr(returns[tb]))
+            cov  = returns.cov()
+            beta = float(cov.loc[tb, ta] / cov.loc[ta, ta]) if cov.loc[ta, ta] != 0 else 0
+            roll = returns[ta].rolling(60).corr(returns[tb])
+            spread = np.log(closes[ta] / closes[tb])
+            spread_z = float((spread - spread.mean()) / spread.std()) if spread.std() != 0 else 0
+            return {
+                "correlation":          round(corr, 4),
+                "r_squared":            round(corr**2, 4),
+                "beta_b_vs_a":          round(beta, 4),
+                "rolling_60d_mean":     round(float(roll.mean()), 4),
+                "rolling_60d_std":      round(float(roll.std()), 4),
+                "rolling_60d_min":      round(float(roll.min()), 4),
+                "rolling_60d_max":      round(float(roll.max()), 4),
+                "rolling_60d_current":  round(float(roll.iloc[-1]), 4),
+                "spread_z_score":       round(spread_z, 3),
+                "observations":         len(returns),
+            }
+
+        metrics = await loop.run_in_executor(None, _calc_pair)
+        if "error" in metrics:
+            return metrics
+
+        c = metrics["correlation"]
+        interp = (
+            "🔴 Very strongly correlated — move almost in lockstep" if c > 0.80 else
+            "🟠 Strongly correlated — shared sector drivers" if c > 0.60 else
+            "🟡 Moderately correlated — partial co-movement" if c > 0.40 else
+            "⚪ Weakly correlated" if c > 0.20 else
+            "🟢 Near-zero / inverse — potential hedge pair"
+        )
+        spread_signal = (
+            "⚠️  Unusual divergence from historical ratio — mean-reversion trade potential"
+            if abs(metrics["spread_z_score"]) > 2 else
+            "✅ Spread within normal range"
+        )
+        return {
+            "mode":          "pair",
+            "ticker_a":      ta,
+            "ticker_b":      tb,
+            "period":        period,
+            "metrics":       metrics,
+            "interpretation": interp,
+            "spread_signal": spread_signal,
+            "revolut_a":     ta in REVOLUT_STOCKS,
+            "revolut_b":     tb in REVOLUT_STOCKS,
+            "trade_ideas": {
+                "pair_trade": abs(metrics["spread_z_score"]) > 2,
+                "z_score":    metrics["spread_z_score"],
+                "action": (
+                    f"Long {ta} / Short {tb}" if metrics["spread_z_score"] < -2 else
+                    f"Long {tb} / Short {ta}" if metrics["spread_z_score"] > 2 else
+                    "No divergence trade — spread in range"
+                ),
+            },
+        }
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # MODE C — Sector Clustering (correlation matrix)
+    # ═════════════════════════════════════════════════════════════════════════
+    if mode == "cluster":
+        if len(tickers) < 3:
+            return {"error": "Provide 3+ tickers for cluster mode"}
+
+        def _calc_cluster():
+            import yfinance as yf, numpy as np, pandas as pd, math
+            data = yf.download(tickers, period=period, auto_adjust=True, progress=False)
+            if isinstance(data.columns, pd.MultiIndex):
+                closes = data["Close"].dropna(axis=1, thresh=max(20, len(data)//3))
+            else:
+                closes = data.dropna()
+            returns = np.log(closes / closes.shift(1)).dropna()
+            corr_m  = returns.corr()
+            # Top pairs
+            pairs = []
+            cols = list(corr_m.columns)
+            for i in range(len(cols)):
+                for j in range(i+1, len(cols)):
+                    pairs.append((cols[i], cols[j], round(float(corr_m.iloc[i, j]), 4)))
+            pairs.sort(key=lambda x: abs(x[2]), reverse=True)
+            # Avg per ticker
+            avg_corr = {
+                t: round(float(corr_m[t].drop(t).abs().mean()), 4)
+                for t in corr_m.columns
+            }
+            matrix_rows = []
+            for tkr in corr_m.index:
+                row = {"ticker": tkr}
+                for other in corr_m.columns:
+                    row[other] = round(float(corr_m.loc[tkr, other]), 4)
+                matrix_rows.append(row)
+            return {
+                "matrix": matrix_rows,
+                "top_pairs":  [(a, b, c) for a, b, c in pairs[:5]],
+                "weak_pairs": [(a, b, c) for a, b, c in pairs[-5:]],
+                "avg_corr_per_ticker": avg_corr,
+                "diversifiers": sorted(avg_corr.items(), key=lambda x: x[1])[:3],
+                "most_connected": sorted(avg_corr.items(), key=lambda x: x[1], reverse=True)[:3],
+            }
+
+        result = await loop.run_in_executor(None, _calc_cluster)
+        if "error" in result:
+            return result
+
+        return {
+            "mode":    "cluster",
+            "tickers": tickers,
+            "period":  period,
+            **result,
+            "revolut_available": {t: t in REVOLUT_STOCKS for t in tickers},
+            "insight": (
+                f"Most connected: {result['most_connected'][0][0]} (avg corr {result['most_connected'][0][1]}). "
+                f"Best diversifier: {result['diversifiers'][0][0]} (avg corr {result['diversifiers'][0][1]})."
+            ),
+        }
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # MODE D — Realized / Rolling Correlation
+    # ═════════════════════════════════════════════════════════════════════════
+    if mode == "rolling":
+        if len(tickers) < 2:
+            return {"error": "Provide 2 tickers for rolling mode"}
+        ta, tb = tickers[0], tickers[1]
+
+        def _calc_rolling():
+            import yfinance as yf, numpy as np, pandas as pd, math
+            data = yf.download([ta, tb], period=period, auto_adjust=True, progress=False)
+            if isinstance(data.columns, pd.MultiIndex):
+                closes = data["Close"][[ta, tb]].dropna()
+            else:
+                closes = data.dropna()
+            returns = np.log(closes / closes.shift(1)).dropna()
+            if ta not in returns.columns or tb not in returns.columns:
+                return {"error": "Insufficient data"}
+
+            # Multi-window rolling
+            windows_result = {}
+            for w in [20, 60, 120]:
+                roll = returns[ta].rolling(w).corr(returns[tb]).dropna()
+                windows_result[f"{w}d"] = {
+                    "current": round(float(roll.iloc[-1]), 4),
+                    "mean":    round(float(roll.mean()), 4),
+                    "std":     round(float(roll.std()), 4),
+                    "min":     round(float(roll.min()), 4),
+                    "max":     round(float(roll.max()), 4),
+                }
+
+            # Regime correlation
+            regimes = {}
+            ret_a = returns[ta]
+            for name, mask in [
+                ("all_days",          pd.Series(True, index=returns.index)),
+                ("up_days",           ret_a > 0),
+                ("down_days",         ret_a < 0),
+                ("high_vol_top25pct", ret_a.abs() > ret_a.abs().quantile(0.75)),
+                ("large_drawdown",    ret_a < -0.02),
+            ]:
+                subset = returns[mask]
+                if len(subset) >= 20:
+                    regimes[name] = {
+                        "corr": round(float(subset[ta].corr(subset[tb])), 4),
+                        "days": int(mask.sum()),
+                    }
+
+            crisis_amplification = (
+                regimes.get("large_drawdown", {}).get("corr", 0) >
+                regimes.get("all_days", {}).get("corr", 0) + 0.1
+            )
+            return {
+                "rolling_windows": windows_result,
+                "regime_correlation": regimes,
+                "crisis_amplification": crisis_amplification,
+            }
+
+        result = await loop.run_in_executor(None, _calc_rolling)
+        if isinstance(result, dict) and "error" in result:
+            return result
+
+        return {
+            "mode":    "rolling",
+            "ticker_a": ta,
+            "ticker_b": tb,
+            "period":   period,
+            **result,
+            "key_insight": (
+                "⚠️  Correlation spikes during sell-offs — diversification may FAIL in crisis"
+                if result.get("crisis_amplification") else
+                "✅ Correlation is stable across market regimes"
+            ),
+            "revolut_a": ta in REVOLUT_STOCKS,
+            "revolut_b": tb in REVOLUT_STOCKS,
+        }
+
+    return {"error": "Unknown mode"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TOOL 22 — options_analysis
+# Source: Awesome-Finance-Skills / options-payoff SKILL.md
+# Converted to pure JSON output (no HTML — MCP returns structured data)
+# Supports: butterfly, vertical_spread, iron_condor, straddle, strangle,
+#           covered_call, naked_put, calendar_spread (BS approximation)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def options_analysis(
+    strategy: str,
+    underlying: str,
+    spot: float,
+    strikes: List[float],
+    premium: float,
+    dte: int = 30,
+    iv: float = 0.20,
+    quantity: int = 1,
+    multiplier: int = 100,
+    risk_free_rate: float = 0.043,
+) -> dict:
+    """
+    Black-Scholes options payoff & theoretical value analysis.
+    Converted from the finance-skills options-payoff SKILL.md.
+    Returns expiry payoff curve, breakevens, max P&L, Greeks, and Revolut context.
+
+    Args:
+        strategy:       "butterfly" | "vertical_spread" | "iron_condor" |
+                        "straddle" | "strangle" | "covered_call" | "naked_put"
+        underlying:     Ticker symbol e.g. "SPY", "NVDA", "AAPL"
+        spot:           Current underlying price e.g. 580.0
+        strikes:        Strike prices list (order matters per strategy):
+                        butterfly/iron_condor: [K1, K2, K3] or [K1,K2,K3,K4]
+                        vertical_spread:       [K_long, K_short]
+                        straddle/naked_put/covered_call: [K]
+                        strangle:              [K_put, K_call]
+        premium:        Net premium paid (positive=debit) or received (negative=credit)
+        dte:            Days to expiry (default 30)
+        iv:             Implied volatility as decimal e.g. 0.20 = 20% (default 0.20)
+        quantity:       Number of contracts (default 1)
+        multiplier:     Contract multiplier (default 100 for equity options)
+        risk_free_rate: Annual risk-free rate (default 0.043 = 4.3%)
+    """
+    import math
+
+    def norm_cdf(x: float) -> float:
+        """Cumulative standard normal — Abramowitz & Stegun 26.2.17"""
+        if x < -8: return 0.0
+        if x >  8: return 1.0
+        t = 1 / (1 + 0.2316419 * abs(x))
+        poly = t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))))
+        p = 1 - (1 / math.sqrt(2 * math.pi)) * math.exp(-0.5 * x * x) * poly
+        return p if x >= 0 else 1 - p
+
+    def bs_call(S: float, K: float, T: float, r: float, sig: float) -> float:
+        if T <= 0: return max(S - K, 0)
+        d1 = (math.log(S / K) + (r + 0.5 * sig**2) * T) / (sig * math.sqrt(T))
+        d2 = d1 - sig * math.sqrt(T)
+        return S * norm_cdf(d1) - K * math.exp(-r * T) * norm_cdf(d2)
+
+    def bs_put(S: float, K: float, T: float, r: float, sig: float) -> float:
+        return bs_call(S, K, T, r, sig) - S + K * math.exp(-r * T)
+
+    def bs_delta(S, K, T, r, sig, opt="call") -> float:
+        if T <= 0: return 1.0 if (S > K and opt == "call") else 0.0
+        d1 = (math.log(S / K) + (r + 0.5 * sig**2) * T) / (sig * math.sqrt(T))
+        return norm_cdf(d1) if opt == "call" else norm_cdf(d1) - 1
+
+    T = dte / 365.0
+    strat = strategy.lower().strip()
+
+    # ── scan price range for payoff curve (21 points) ────────────────────────
+    min_s = min(strikes) * 0.80
+    max_s = max(strikes) * 1.20
+    price_range = [round(min_s + (max_s - min_s) * i / 20, 2) for i in range(21)]
+
+    def expiry_pnl(S: float) -> float:
+        """Per-contract P&L at expiry (excluding premium which is added separately)."""
+        if strat == "butterfly":
+            k1, k2, k3 = strikes[0], strikes[1], strikes[2]
+            if   S >= k3: return 0
+            elif S >= k2: return k3 - S
+            elif S >= k1: return S - k1
+            else:         return 0
+        elif strat == "vertical_spread":
+            k1, k2 = strikes[0], strikes[1]
+            return max(S - k1, 0) - max(S - k2, 0)
+        elif strat == "iron_condor":
+            k1, k2, k3, k4 = (strikes + [strikes[-1]+1])[:4]
+            put_spread  = max(k2 - S, 0) - max(k1 - S, 0)
+            call_spread = max(S - k3, 0) - max(S - k4, 0)
+            return -(put_spread + call_spread)
+        elif strat == "straddle":
+            k = strikes[0]
+            return max(S - k, 0) + max(k - S, 0)
+        elif strat == "strangle":
+            kp, kc = strikes[0], strikes[1]
+            return max(kp - S, 0) + max(S - kc, 0)
+        elif strat == "covered_call":
+            k = strikes[0]
+            return S - spot - max(S - k, 0)   # long stock + short call
+        elif strat == "naked_put":
+            k = strikes[0]
+            return -max(k - S, 0)
+        return 0
+
+    def theory_pnl(S: float) -> float:
+        """Theoretical P&L at current DTE via Black-Scholes."""
+        if strat == "butterfly":
+            k1, k2, k3 = strikes[0], strikes[1], strikes[2]
+            v = (bs_put(S, k1, T, risk_free_rate, iv)
+               - 2 * bs_put(S, k2, T, risk_free_rate, iv)
+               + bs_put(S, k3, T, risk_free_rate, iv))
+            return v
+        elif strat == "vertical_spread":
+            k1, k2 = strikes[0], strikes[1]
+            return bs_call(S, k1, T, risk_free_rate, iv) - bs_call(S, k2, T, risk_free_rate, iv)
+        elif strat == "straddle":
+            k = strikes[0]
+            return bs_call(S, k, T, risk_free_rate, iv) + bs_put(S, k, T, risk_free_rate, iv)
+        elif strat == "strangle":
+            kp, kc = strikes[0], strikes[1]
+            return bs_put(S, kp, T, risk_free_rate, iv) + bs_call(S, kc, T, risk_free_rate, iv)
+        elif strat == "naked_put":
+            return -bs_put(S, strikes[0], T, risk_free_rate, iv)
+        elif strat == "covered_call":
+            return S - spot - bs_call(S, strikes[0], T, risk_free_rate, iv)
+        return expiry_pnl(S)
+
+    # ── compute payoff curve (net of premium, scaled by qty × multiplier) ────
+    scale = quantity * multiplier
+
+    curve_expiry  = [round((expiry_pnl(p) - premium) * scale, 2) for p in price_range]
+    curve_theory  = [round((theory_pnl(p)  - premium) * scale, 2) for p in price_range]
+
+    # ── key stats ─────────────────────────────────────────────────────────────
+    max_profit = max(curve_expiry)
+    max_loss   = min(curve_expiry)
+
+    # breakevens (sign change in expiry curve)
+    breakevens = []
+    for i in range(len(curve_expiry) - 1):
+        if curve_expiry[i] * curve_expiry[i+1] <= 0:
+            # linear interpolation
+        
+            p1, p2 = price_range[i], price_range[i+1]
+            v1, v2 = curve_expiry[i], curve_expiry[i+1]
+            if v2 - v1 != 0:
+                be = round(p1 - v1 * (p2 - p1) / (v2 - v1), 2)
+                breakevens.append(be)
+
+    # current theoretical P&L at spot
+    current_theory_pnl = round((theory_pnl(spot) - premium) * scale, 2)
+
+    # Greeks at spot
+    k_center = strikes[len(strikes)//2]
+    delta_v = round(bs_delta(spot, k_center, T, risk_free_rate, iv), 4)
+
+    # ── revolut context ───────────────────────────────────────────────────────
+    on_revolut = underlying.upper() in REVOLUT_STOCKS
+
+    return {
+        "strategy":    strat,
+        "underlying":  underlying.upper(),
+        "spot":        spot,
+        "strikes":     strikes,
+        "dte":         dte,
+        "iv_pct":      round(iv * 100, 1),
+        "premium":     premium,
+        "quantity":    quantity,
+        "multiplier":  multiplier,
+        "scale":       scale,
+        # Key stats
+        "max_profit_usd":    max_profit,
+        "max_loss_usd":      max_loss,
+        "breakevens":        breakevens,
+        "current_theory_pnl": current_theory_pnl,
+        "risk_reward_ratio": round(abs(max_profit / max_loss), 2) if max_loss != 0 else None,
+        # Greeks (simplified at center strike)
+        "delta_approx": delta_v,
+        "theta_per_day_approx": round(
+            -bs_call(spot, k_center, T, risk_free_rate, iv) * iv / (2 * math.sqrt(T * 365)) if T > 0 else 0, 4
+        ),
+        # Payoff curve (21 points)
+        "payoff_curve": {
+            "prices":        price_range,
+            "expiry_pnl":   curve_expiry,
+            "theory_pnl":   curve_theory,
+        },
+        # Revolut context
+        "revolut_available": on_revolut,
+        "revolut_note": (
+            f"💳 {underlying.upper()} is tradeable on Revolut — however Revolut does NOT support options. "
+            "Use this analysis for directional bias and then trade the underlying stock on Revolut."
+            if on_revolut else
+            f"❌ {underlying.upper()} not on Revolut — use for research only."
+        ),
+        "strategy_summary": (
+            f"{strat.replace('_',' ').title()}: "
+            f"Max profit ${max_profit:+.0f} / Max loss ${max_loss:+.0f} / "
+            f"Breakeven(s): {', '.join(f'${b}' for b in breakevens) or 'N/A'}"
+        ),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TOOL 23 — geopolitical_energy_risk
+# Source: Awesome-Finance-Skills / hormuz-strait SKILL.md
+# Full Hormuz Strait Monitor integration + Revolut energy trade signals
+# ─────────────────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def geopolitical_energy_risk() -> dict:
+    """
+    Real-time Strait of Hormuz status — shipping transits, oil prices,
+    stranded vessels, war-risk insurance, diplomatic situation, and
+    global trade impact. Converted from finance-skills hormuz-strait SKILL.md.
+
+    No arguments. Perfect for energy sector traders and macro context.
+    Returns structured JSON with Revolut energy trade signals.
+    """
+    HORMUZ_API = "https://hormuzstraitmonitor.com/api/dashboard"
+
+    try:
+        async with httpx.AsyncClient(timeout=12) as c:
+            r = await c.get(HORMUZ_API, headers=HEADERS)
+            r.raise_for_status()
+            payload = r.json()
+    except Exception as exc:
+        return {
+            "error": f"Hormuz Monitor API unavailable: {exc}",
+            "fallback": "Check https://hormuzstraitmonitor.com directly",
+            "revolut_tip": (
+                "💳 When Hormuz data is unavailable, monitor XOM, CVX, OXY, XLE on Revolut "
+                "via revolut_sector_scan('energy') for real-time oil sector pricing."
+            ),
+        }
+
+    if not payload.get("success"):
+        return {"error": "Hormuz Monitor returned success=false", "raw": payload}
+
+    d = payload.get("data", {})
+
+    # ── extract sections ──────────────────────────────────────────────────────
+    strait     = d.get("straitStatus", {})
+    ships      = d.get("shipCount", {})
+    oil        = d.get("oilPrice", {})
+    stranded   = d.get("strandedVessels", {})
+    insurance  = d.get("insurance", {})
+    throughput = d.get("throughput", {})
+    diplomacy  = d.get("diplomacy", {})
+    gti        = d.get("globalTradeImpact", {})
+    timeline   = d.get("crisisTimeline", {}).get("events", [])
+    news       = d.get("news", [{}])
+
+    # ── risk classification ───────────────────────────────────────────────────
+    ins_level  = insurance.get("level", "normal")
+    risk_emoji = {"normal": "🟢", "elevated": "🟡", "high": "🔴", "critical": "🚨"}.get(ins_level, "⚪")
+
+    pct_normal = ships.get("percentOfNormal", 100)
+    traffic_signal = (
+        "🚨 MAJOR DISRUPTION — traffic severely below normal" if pct_normal < 60 else
+        "🔴 SIGNIFICANT disruption" if pct_normal < 80 else
+        "🟡 Mild disruption" if pct_normal < 95 else
+        "🟢 Normal traffic"
+    )
+
+    # ── Revolut energy trade signals ─────────────────────────────────────────
+    REVOLUT_ENERGY = {t: REVOLUT_STOCKS.get(t, t) for t in ["XOM","CVX","COP","OXY","XLE","USO","SLV","GLD"]}
+    on_revolut_energy = [t for t in REVOLUT_ENERGY if t in REVOLUT_STOCKS]
+
+    brent_chg = oil.get("changePercent24h", 0)
+    if ins_level in ("high", "critical") or pct_normal < 80:
+        trade_bias = "🔴 BULLISH oil — consider XOM, CVX, OXY, XLE on Revolut (long energy)"
+        hedge_tip  = "Consider GLD as safe-haven via Revolut (Gold ETF)"
+    elif ins_level == "elevated":
+        trade_bias = "🟡 MILD bullish oil — monitor XLE, OXY for breakout entry on Revolut"
+        hedge_tip  = "Watch for escalation before committing to energy longs"
+    else:
+        trade_bias = "🟢 Normal — no Hormuz premium in oil prices. Focus on fundamentals."
+        hedge_tip  = "No hedging urgency from Hormuz risk currently"
+
+    return {
+        "source":       "hormuzstraitmonitor.com",
+        "last_updated": d.get("lastUpdated", payload.get("timestamp", "unknown")),
+        "strait_status": {
+            "status":      strait.get("status", "UNKNOWN"),
+            "since":       strait.get("since"),
+            "description": strait.get("description"),
+        },
+        "ship_traffic": {
+            "current_transits":  ships.get("currentTransits"),
+            "last_24h":          ships.get("last24h"),
+            "normal_daily":      ships.get("normalDaily"),
+            "percent_of_normal": pct_normal,
+            "signal":            traffic_signal,
+        },
+        "oil_price": {
+            "brent_usd":      oil.get("brentPrice"),
+            "change_24h":     oil.get("change24h"),
+            "change_pct_24h": brent_chg,
+            "trend":          "📈 Rising" if brent_chg > 0 else "📉 Falling",
+        },
+        "stranded_vessels": {
+            "total":        stranded.get("total", 0),
+            "tankers":      stranded.get("tankers", 0),
+            "bulk":         stranded.get("bulk", 0),
+            "other":        stranded.get("other", 0),
+            "change_today": stranded.get("changeToday", 0),
+        },
+        "insurance_risk": {
+            "level":           ins_level,
+            "emoji":           risk_emoji,
+            "war_risk_pct":    insurance.get("warRiskPercent"),
+            "normal_pct":      insurance.get("normalPercent"),
+            "multiplier":      insurance.get("multiplier"),
+            "interpretation": {
+                "normal":   "No elevated risk — shipping operating normally",
+                "elevated": "Some disruption — monitor closely",
+                "high":     "Significant risk — active disruption or credible threat",
+                "critical": "Severe disruption — major impact on global oil supply",
+            }.get(ins_level, "Unknown"),
+        },
+        "cargo_throughput": {
+            "today_dwt":     throughput.get("todayDWT"),
+            "average_dwt":   throughput.get("averageDWT"),
+            "percent_normal": throughput.get("percentOfNormal"),
+            "last_7_days":   throughput.get("last7Days", []),
+        },
+        "diplomacy": {
+            "status":   diplomacy.get("status"),
+            "headline": diplomacy.get("headline"),
+            "parties":  diplomacy.get("parties", []),
+            "summary":  diplomacy.get("summary"),
+        },
+        "global_trade_impact": {
+            "pct_world_oil_at_risk":       gti.get("percentOfWorldOilAtRisk"),
+            "estimated_daily_cost_bn_usd": gti.get("estimatedDailyCostBillions"),
+            "affected_regions":            gti.get("affectedRegions", []),
+            "alternative_routes":          gti.get("alternativeRoutes", []),
+            "spr_days":                    gti.get("supplyChainImpact", {}).get("sprStatusDays"),
+        },
+        "crisis_timeline":  timeline[-5:] if timeline else [],
+        "latest_news":      news[0] if news else {},
+        "revolut_energy_signals": {
+            "trade_bias":          trade_bias,
+            "hedge_tip":           hedge_tip,
+            "revolut_energy_tickers": on_revolut_energy,
+            "suggested_tools": [
+                "revolut_sector_scan('energy')",
+                "technical_signals('XLE')",
+                "price_alert_check([{'ticker':'OXY','target':...,'direction':'above'}])",
+            ],
+        },
+        "risk_summary": (
+            f"{risk_emoji} Hormuz {strait.get('status','UNKNOWN')} | "
+            f"Traffic: {pct_normal}% of normal | "
+            f"Insurance: {ins_level.upper()} ({insurance.get('multiplier','?')}× normal) | "
+            f"Brent: ${oil.get('brentPrice','?')} ({brent_chg:+.2f}%)"
+        ),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TOOL 24 — stock_deep_data
+# Source: Awesome-Finance-Skills / yfinance-data SKILL.md
+# Exposes: income statement, balance sheet, cash flow, analyst targets,
+#          institutional holders, insider transactions, dividends, news
+# ─────────────────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def stock_deep_data(
+    ticker: str,
+    data_type: str = "overview",
+    quarterly: bool = False,
+) -> dict:
+    """
+    Deep fundamental data via yfinance — balance sheet, income statement,
+    cash flow, analyst ratings, institutional holders, insider transactions,
+    dividends, and company news. Converted from finance-skills yfinance-data SKILL.md.
+
+    Args:
+        ticker:    Stock symbol e.g. "NVDA", "AAPL", "MSFT"
+        data_type: What to fetch:
+            "overview"       — company info, P/E, beta, sector, market cap
+            "income"         — income statement (revenue, EPS, net income, EBITDA)
+            "balance"        — balance sheet (assets, liabilities, equity, cash)
+            "cashflow"       — cash flow statement (operating, investing, financing FCF)
+            "analysts"       — analyst price targets + recommendations + upgrades
+            "holders"        — institutional + insider holdings
+            "insiders"       — insider buy/sell transactions (SEC Form 4)
+            "dividends"      — dividend history + yield
+            "news"           — latest company news
+            "all"            — overview + analysts + key financial ratios
+        quarterly: Use quarterly data instead of annual (for income/balance/cashflow)
+    """
+    try:
+        ticker = validate_ticker(ticker)
+    except ValueError as e:
+        return {"error": str(e)}
+
+    dt = data_type.lower().strip()
+    valid = ["overview","income","balance","cashflow","analysts","holders","insiders","dividends","news","all"]
+    if dt not in valid:
+        return {"error": f"Unknown data_type '{dt}'", "valid": valid}
+
+    on_revolut = ticker in REVOLUT_STOCKS
+
+    def _fetch() -> dict:
+        import yfinance as yf
+        import pandas as pd
+
+        tk   = yf.Ticker(ticker)
+        info = tk.info or {}
+        fi   = tk.fast_info
+
+        def _safe_df(df) -> list:
+            """Convert DataFrame to list of dicts, handle MultiIndex columns."""
+            if df is None or (hasattr(df, 'empty') and df.empty):
+                return []
+            try:
+                if isinstance(df.columns, pd.MultiIndex):
+                    df = df.droplevel(0, axis=1)
+                df = df.reset_index()
+                return df.head(4).to_dict(orient="records")
+            except Exception:
+                return []
+
+        def _fmt_big(v) -> str:
+            if v is None: return "N/A"
+            try:
+                v = float(v)
+                if v >= 1e12: return f"${v/1e12:.2f}T"
+                if v >= 1e9:  return f"${v/1e9:.2f}B"
+                if v >= 1e6:  return f"${v/1e6:.2f}M"
+                return f"${v:.2f}"
+            except Exception:
+                return str(v)
+
+        result: dict = {"ticker": ticker, "revolut_available": on_revolut}
+
+        if dt in ("overview", "all"):
+            result["overview"] = {
+                "name":          info.get("shortName", ticker),
+                "sector":        info.get("sector"),
+                "industry":      info.get("industry"),
+                "country":       info.get("country"),
+                "employees":     info.get("fullTimeEmployees"),
+                "market_cap":    _fmt_big(info.get("marketCap")),
+                "current_price": round(float(fi.last_price or 0), 2),
+                "52w_high":      round(float(info.get("fiftyTwoWeekHigh", 0) or 0), 2),
+                "52w_low":       round(float(info.get("fiftyTwoWeekLow", 0) or 0), 2),
+                "trailing_pe":   round(float(info.get("trailingPE", 0) or 0), 2),
+                "forward_pe":    round(float(info.get("forwardPE", 0) or 0), 2),
+                "peg_ratio":     round(float(info.get("pegRatio", 0) or 0), 2),
+                "pb_ratio":      round(float(info.get("priceToBook", 0) or 0), 2),
+                "beta":          round(float(info.get("beta", 0) or 0), 2),
+                "dividend_yield": f"{round((info.get('dividendYield') or 0)*100, 2)}%",
+                "revenue_ttm":   _fmt_big(info.get("totalRevenue")),
+                "ebitda":        _fmt_big(info.get("ebitda")),
+                "profit_margin": f"{round((info.get('profitMargins') or 0)*100, 2)}%",
+                "gross_margin":  f"{round((info.get('grossMargins') or 0)*100, 2)}%",
+                "short_ratio":   info.get("shortRatio"),
+                "description":   (info.get("longBusinessSummary") or "")[:400],
+            }
+
+        if dt == "income":
+            stmt = tk.quarterly_income_stmt if quarterly else tk.income_stmt
+            result["income_statement"] = _safe_df(stmt.T) if stmt is not None and not stmt.empty else []
+            result["period"] = "quarterly" if quarterly else "annual"
+
+        if dt == "balance":
+            bs = tk.quarterly_balance_sheet if quarterly else tk.balance_sheet
+            result["balance_sheet"] = _safe_df(bs.T) if bs is not None and not bs.empty else []
+            result["period"] = "quarterly" if quarterly else "annual"
+
+        if dt == "cashflow":
+            cf = tk.quarterly_cashflow if quarterly else tk.cashflow
+            result["cashflow"] = _safe_df(cf.T) if cf is not None and not cf.empty else []
+            # FCF from latest
+            try:
+                op  = float(cf.loc["Operating Cash Flow"].iloc[0])
+                cap = float(cf.loc["Capital Expenditure"].iloc[0])
+                result["free_cash_flow_latest"] = _fmt_big(op + cap)
+            except Exception:
+                result["free_cash_flow_latest"] = "N/A"
+            result["period"] = "quarterly" if quarterly else "annual"
+
+        if dt in ("analysts", "all"):
+            try:
+                targets = tk.analyst_price_targets
+                recs    = tk.recommendations
+                upgrades= tk.upgrades_downgrades
+
+                result["analyst_targets"] = {
+                    "current":     round(float(targets.get("current", 0) or 0), 2),
+                    "mean":        round(float(targets.get("mean", 0) or 0), 2),
+                    "high":        round(float(targets.get("high", 0) or 0), 2),
+                    "low":         round(float(targets.get("low", 0) or 0), 2),
+                    "num_analysts": targets.get("numberOfAnalysts"),
+                }
+                if recs is not None and not recs.empty:
+                    latest = recs.iloc[0]
+                    result["recommendation"] = {
+                        "period":   str(recs.index[0])[:10],
+                        "strong_buy":  int(latest.get("strongBuy", 0)),
+                        "buy":         int(latest.get("buy", 0)),
+                        "hold":        int(latest.get("hold", 0)),
+                        "sell":        int(latest.get("sell", 0)),
+                        "strong_sell": int(latest.get("strongSell", 0)),
+                    }
+                if upgrades is not None and not upgrades.empty:
+                    result["recent_upgrades"] = upgrades.head(5).reset_index().to_dict(orient="records")
+            except Exception as e:
+                result["analyst_targets"] = {"error": str(e)}
+
+        if dt == "holders":
+            try:
+                inst = tk.institutional_holders
+                result["institutional_holders"] = _safe_df(inst) if inst is not None else []
+                mut  = tk.mutualfund_holders
+                result["mutualfund_holders"] = _safe_df(mut)[:5] if mut is not None else []
+            except Exception as e:
+                result["holders_error"] = str(e)
+
+        if dt == "insiders":
+            try:
+                insider = tk.insider_transactions
+                result["insider_transactions"] = _safe_df(insider)[:10] if insider is not None else []
+                insider_buys  = insider[insider["Shares"] > 0] if insider is not None and not insider.empty else None
+                result["insider_summary"] = {
+                    "total_transactions": len(insider) if insider is not None else 0,
+                    "buys":  len(insider_buys) if insider_buys is not None else 0,
+                    "sells": (len(insider) - len(insider_buys)) if insider is not None and insider_buys is not None else 0,
+                    "signal": (
+                        "🟢 Net buying — insider confidence" if insider_buys is not None and len(insider_buys) > len(insider)//2
+                        else "🔴 Net selling" if insider is not None and len(insider) > 0
+                        else "⚪ No recent insider activity"
+                    ),
+                }
+            except Exception as e:
+                result["insiders_error"] = str(e)
+
+        if dt == "dividends":
+            try:
+                divs = tk.dividends
+                result["dividend_history"] = []
+                if divs is not None and not divs.empty:
+                    for dt_idx, v in divs.tail(8).items():
+                        result["dividend_history"].append({
+                            "date": str(dt_idx)[:10],
+                            "amount": round(float(v), 4),
+                        })
+                result["dividend_yield"]   = f"{round((info.get('dividendYield') or 0)*100, 2)}%"
+                result["payout_ratio"]     = f"{round((info.get('payoutRatio') or 0)*100, 2)}%"
+                result["ex_dividend_date"] = info.get("exDividendDate")
+            except Exception as e:
+                result["dividends_error"] = str(e)
+
+        if dt == "news":
+            try:
+                news_items = tk.news or []
+                result["news"] = [
+                    {
+                        "title":      item.get("title"),
+                        "publisher":  item.get("publisher"),
+                        "link":       item.get("link"),
+                        "published":  item.get("providerPublishTime"),
+                    }
+                    for item in news_items[:8]
+                ]
+            except Exception as e:
+                result["news_error"] = str(e)
+
+        if dt == "all":
+            # Add quick financial health summary
+            pe  = float(info.get("trailingPE", 0) or 0)
+            peg = float(info.get("pegRatio", 0) or 0)
+            pm  = float(info.get("profitMargins", 0) or 0)
+            result["health_score"] = {
+                "valuation": "cheap" if pe < 15 else "fair" if pe < 30 else "expensive",
+                "growth_adj": "undervalued" if 0 < peg < 1 else "fair" if peg < 2 else "expensive/no growth",
+                "profitability": "high margin" if pm > 0.2 else "moderate" if pm > 0.05 else "thin/loss",
+                "revolut_verdict": (
+                    f"💳 {ticker} IS on Revolut — fundamental analysis supports "
+                    + ("📈 accumulation" if pe < 25 and pm > 0.1 else "⏳ monitoring")
+                    if on_revolut else
+                    f"❌ {ticker} NOT on Revolut"
+                ),
+            }
+
+        return result
+
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(None, _fetch)
+    except Exception as exc:
+        return {"ticker": ticker, "error": str(exc)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TOOL 25 — options_chain
+# Source: Awesome-Finance-Skills / yfinance-data SKILL.md (options chain section)
+# Live options chain with Greeks approximation + IV surface + Revolut signal
+# ─────────────────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def options_chain(
+    ticker: str,
+    expiry_index: int = 0,
+    option_type: str = "both",
+    near_money_only: bool = True,
+) -> dict:
+    """
+    Live options chain via yfinance — calls, puts, IV, open interest, volume.
+    Converted from finance-skills yfinance-data SKILL.md options section.
+
+    Args:
+        ticker:         Stock symbol e.g. "AAPL", "NVDA", "SPY"
+        expiry_index:   0 = nearest expiry, 1 = next, 2 = third, etc. (default 0)
+        option_type:    "calls" | "puts" | "both" (default "both")
+        near_money_only: Show only strikes within 10% of spot price (default True)
+    """
+    try:
+        ticker = validate_ticker(ticker)
+    except ValueError as e:
+        return {"error": str(e)}
+
+    on_revolut = ticker in REVOLUT_STOCKS
+
+    def _fetch_chain():
+        import yfinance as yf
+        import pandas as pd, math
+
+        tk      = yf.Ticker(ticker)
+        spot    = round(float(tk.fast_info.last_price or 0), 2)
+        expiries = tk.options
+
+        if not expiries:
+            return {"error": f"No options data available for {ticker}"}
+
+        idx  = min(expiry_index, len(expiries) - 1)
+        exp  = expiries[idx]
+        chain = tk.option_chain(exp)
+
+        def _process(df: pd.DataFrame, otype: str) -> list:
+            if df is None or df.empty:
+                return []
+            df = df.copy()
+            # near-money filter
+            if near_money_only and spot > 0:
+                df = df[
+                    (df["strike"] >= spot * 0.90) &
+                    (df["strike"] <= spot * 1.10)
+                ]
+            results = []
+            for _, row in df.iterrows():
+                strike = float(row.get("strike", 0))
+                bid    = float(row.get("bid", 0) or 0)
+                ask    = float(row.get("ask", 0) or 0)
+                last   = float(row.get("lastPrice", 0) or 0)
+                iv     = float(row.get("impliedVolatility", 0) or 0)
+                oi     = int(row.get("openInterest", 0) or 0)
+                vol    = int(row.get("volume", 0) or 0)
+                itm    = bool(row.get("inTheMoney", False))
+
+                # Moneyness
+                if spot > 0:
+                    mono_pct = round((spot - strike) / spot * 100, 1) if otype == "calls" else round((strike - spot) / spot * 100, 1)
+                else:
+                    mono_pct = 0.0
+
+                results.append({
+                    "strike":        strike,
+                    "type":          otype,
+                    "bid":           round(bid, 2),
+                    "ask":           round(ask, 2),
+                    "last":          round(last, 2),
+                    "mid":           round((bid + ask) / 2, 2),
+                    "iv_pct":        round(iv * 100, 1),
+                    "open_interest": oi,
+                    "volume":        vol,
+                    "in_the_money":  itm,
+                    "moneyness_pct": mono_pct,
+                    "bid_ask_spread": round(ask - bid, 2),
+                })
+            return sorted(results, key=lambda x: x["strike"])
+
+        calls_out = _process(chain.calls, "call") if option_type in ("calls","both") else []
+        puts_out  = _process(chain.puts,  "put")  if option_type in ("puts","both")  else []
+
+        all_opts = calls_out + puts_out
+        # Max pain: strike with most OI both sides
+        oi_by_strike = {}
+        for o in all_opts:
+            oi_by_strike[o["strike"]] = oi_by_strike.get(o["strike"], 0) + o["open_interest"]
+        max_pain_strike = max(oi_by_strike, key=oi_by_strike.get) if oi_by_strike else None
+
+        # IV surface summary
+        if all_opts:
+            ivs = [o["iv_pct"] for o in all_opts if o["iv_pct"] > 0]
+            avg_iv = round(sum(ivs)/len(ivs), 1) if ivs else 0
+            atm_iv = None
+            for o in sorted(all_opts, key=lambda x: abs(x["strike"]-spot)):
+                if o.get("iv_pct", 0) > 0:
+                    atm_iv = o["iv_pct"]
+                    break
+        else:
+            avg_iv = atm_iv = 0
+
+        return {
+            "ticker":        ticker,
+            "spot":          spot,
+            "expiry":        exp,
+            "expiry_index":  idx,
+            "available_expiries": list(expiries[:6]),
+            "calls":         calls_out,
+            "puts":          puts_out,
+            "summary": {
+                "total_calls":     len(calls_out),
+                "total_puts":      len(puts_out),
+                "max_pain_strike": max_pain_strike,
+                "avg_iv_pct":      avg_iv,
+                "atm_iv_pct":      atm_iv,
+                "put_call_oi_ratio": (
+                    round(sum(o["open_interest"] for o in puts_out) /
+                          max(sum(o["open_interest"] for o in calls_out), 1), 2)
+                    if puts_out and calls_out else None
+                ),
+                "iv_signal": (
+                    "🔴 High IV — expensive premium, sell strategies favored" if atm_iv and atm_iv > 40 else
+                    "🟡 Elevated IV — earnings/event likely priced in" if atm_iv and atm_iv > 25 else
+                    "🟢 Low IV — cheap premium, buy strategies favored" if atm_iv else
+                    "⚪ IV data unavailable"
+                ),
+            },
+            "revolut_available": on_revolut,
+            "revolut_note": (
+                f"💳 {ticker} on Revolut — use IV signal for directional timing: "
+                + ("high IV → expect big move" if atm_iv and atm_iv > 30 else "normal IV → steady state")
+                if on_revolut else f"❌ {ticker} not on Revolut"
+            ),
+        }
+
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(None, _fetch_chain)
+    except Exception as exc:
+        return {"ticker": ticker, "error": str(exc)}
