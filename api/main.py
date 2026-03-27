@@ -141,13 +141,13 @@ def _arrow(chg: float) -> str:
 
 # ─── FastAPI app ──────────────────────────────────────────────────────────────
 app = FastAPI(
-    title="mcprice API v3",
+    title="mcprice API v4",
     description=(
-        "Real-time stock & crypto prices. 16 endpoints. No API key required. "
+        "Real-time stock & crypto prices. 20 endpoints. No API key required. "
         "Stocks via yfinance, crypto via Binance. "
         "Fear & Greed · Technical Signals · Insider Flow · Earnings · Funding Rates."
     ),
-    version="3.0.0",
+    version="4.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -164,7 +164,7 @@ app.add_middleware(
 @app.get("/health", tags=["System"])
 async def health():
     """Health check."""
-    return {"status": "ok", "version": "3.0.0", "tools": 16}
+    return {"status": "ok", "version": "4.0.0", "tools": 20}
 
 # ─── STOCKS ───────────────────────────────────────────────────────────────────
 
@@ -673,4 +673,180 @@ async def alert_check(alerts: List[AlertItem] = Body(...)):
         "safe":      safe,
         "results":   results,
         "summary":   f"🚨 {len(triggered)} TRIGGERED. ⏳ {len(safe)} pending.",
+    }
+
+# ─── FROM AWESOME-FINANCE-SKILLS ─────────────────────────────────────────────
+
+# ─── NEWS (alphaear-news) ─────────────────────────────────────────────────────
+
+NEWS_SOURCES = {
+    "cls": "财联社 (CLS Finance)", "wallstreetcn": "Wall Street CN",
+    "xueqiu": "Xueqiu", "hackernews": "Hacker News",
+    "36kr": "36Kr Tech", "weibo": "Weibo Trending", "zhihu": "Zhihu Hot",
+}
+_BULLISH_KW = {"surge","soar","rally","beat","upgrade","bullish","growth","profit",
+               "gain","rise","boost","exceed","record high","strong","buy","recovery"}
+_BEARISH_KW = {"crash","plunge","slump","miss","downgrade","bearish","loss","layoff",
+               "fraud","fall","drop","decline","warning","risk","sell","record low"}
+
+@app.get("/news", tags=["Finance Skills"])
+async def financial_news(
+    source: str = Query("wallstreetcn", description="News source: cls|wallstreetcn|xueqiu|hackernews|36kr|weibo|zhihu"),
+    count: int  = Query(10, ge=1, le=20)
+):
+    """Fetch real-time hot financial news from NewsNow API. No API key required."""
+    source = source.lower().strip()
+    if source not in NEWS_SOURCES:
+        raise HTTPException(400, detail=f"Unknown source. Available: {list(NEWS_SOURCES.keys())}")
+    url = f"https://newsnow.busiyi.world/api/s?id={source}"
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(url)
+            r.raise_for_status()
+            items = r.json().get("items", [])[:count]
+    except Exception as exc:
+        raise HTTPException(502, detail=str(exc))
+
+    headlines = [{"rank": i+1, "title": it.get("title",""), "url": it.get("url",""),
+                  "pubtime": it.get("publish_time","")} for i, it in enumerate(items)]
+    bull = sum(1 for h in headlines if any(k in h["title"].lower() for k in _BULLISH_KW))
+    bear = sum(1 for h in headlines if any(k in h["title"].lower() for k in _BEARISH_KW))
+    return {
+        "source": source, "source_name": NEWS_SOURCES[source],
+        "count": len(headlines), "headlines": headlines,
+        "mood": "🟢 Bullish" if bull > bear else ("🔴 Bearish" if bear > bull else "⚪ Neutral"),
+        "bull_signals": bull, "bear_signals": bear,
+    }
+
+
+# ─── DEEPEAR SIGNALS (alphaear-deepear-lite) ──────────────────────────────────
+
+@app.get("/deepear-signals", tags=["Finance Skills"])
+async def deepear_signals(limit: int = Query(5, ge=1, le=10)):
+    """Fetch live professional investment signals from DeepEar Lite. No API key."""
+    try:
+        async with httpx.AsyncClient(timeout=12) as c:
+            r = await c.get("https://deepear.vercel.app/latest.json",
+                           headers={"User-Agent": "mcprice/3.0",
+                                    "Referer": "https://deepear.vercel.app/lite"})
+            r.raise_for_status()
+            data = r.json()
+    except Exception as exc:
+        raise HTTPException(502, detail=str(exc))
+
+    signals = []
+    for s in data.get("signals", [])[:limit]:
+        sentiment  = float(s.get("sentiment_score", 0))
+        confidence = float(s.get("confidence", 0))
+        signals.append({
+            "title":          s.get("title", ""),
+            "summary":        s.get("summary", ""),
+            "sentiment_score": round(sentiment, 3),
+            "confidence":      round(confidence, 3),
+            "intensity":       round(float(s.get("intensity", 0)), 3),
+            "reasoning":       s.get("reasoning", ""),
+            "sources":         s.get("sources", []),
+            "emoji":           "🟢" if sentiment > 0.2 else ("🔴" if sentiment < -0.2 else "⚪"),
+        })
+
+    avg_s = round(sum(s["sentiment_score"] for s in signals) / len(signals), 3) if signals else 0
+    return {
+        "generated_at": data.get("generated_at"),
+        "signals_count": len(signals),
+        "signals": signals,
+        "avg_sentiment": avg_s,
+        "overall_mood": "🟢 Bullish" if avg_s > 0.2 else ("🔴 Bearish" if avg_s < -0.2 else "⚪ Mixed"),
+        "source": "deepear.vercel.app",
+    }
+
+
+# ─── PREDICTION MARKETS (alphaear-news / Polymarket) ─────────────────────────
+
+@app.get("/prediction-markets", tags=["Finance Skills"])
+async def prediction_markets(
+    limit:        int            = Query(10, ge=1, le=30),
+    topic_filter: Optional[str] = Query(None, description="Keyword filter e.g. bitcoin, fed, election")
+):
+    """Fetch live Polymarket crowd-probability markets. No API key required."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get("https://gamma-api.polymarket.com/markets",
+                           params={"active": "true", "closed": "false", "limit": str(limit * 2)})
+            r.raise_for_status()
+            raw = r.json()
+    except Exception as exc:
+        raise HTTPException(502, detail=str(exc))
+
+    if topic_filter:
+        kw = topic_filter.lower()
+        raw = [m for m in raw if kw in (m.get("question","") + m.get("slug","")).lower()]
+
+    markets = []
+    for m in raw[:limit]:
+        outcomes = m.get("outcomes", [])
+        prices   = m.get("outcomePrices", [])
+        probs    = []
+        try:
+            for o, p in zip(outcomes, prices):
+                probs.append({"outcome": str(o), "probability": f"{float(p)*100:.1f}%"})
+        except Exception:
+            pass
+        markets.append({
+            "question":      m.get("question",""),
+            "probabilities": probs,
+            "volume_usd":    round(float(m.get("volume", 0)), 0),
+            "slug_url":      f"https://polymarket.com/event/{m.get('slug','')}",
+        })
+    markets.sort(key=lambda x: x["volume_usd"], reverse=True)
+    return {"total": len(markets), "topic_filter": topic_filter, "markets": markets,
+            "source": "Polymarket Gamma API"}
+
+
+# ─── SENTIMENT (alphaear-sentiment adapted, zero deps) ────────────────────────
+
+_SBULL = {"surge","soar","rally","beat","outperform","upgrade","bullish","record high",
+          "strong","growth","profit","gain","rise","boost","exceed","optimistic","buy",
+          "recovery","breakthrough","expansion","eps beat","buyback","dividend increase"}
+_SBEAR = {"crash","plunge","slump","miss","underperform","downgrade","bearish","record low",
+          "weak","loss","cut","sell","layoff","fraud","decline","warning","risk","drop",
+          "eps miss","guidance cut","bankruptcy","investigation","write-off","fine"}
+_SSBULL = {"record earnings","blowout quarter","massive beat","all-time high","explosive growth"}
+_SSBEAR = {"bankruptcy","collapse","fraud","crisis","catastrophic","sec investigation",
+           "accounting scandal","going concern","delisted"}
+
+class SentimentRequest(BaseModel):
+    texts: List[str]
+
+@app.post("/sentiment", tags=["Finance Skills"])
+async def news_sentiment(body: SentimentRequest):
+    """
+    Fast financial sentiment scoring (FinBERT-distilled keyword lexicon).
+    POST a list of texts, get back score -1.0 (bearish) to +1.0 (bullish).
+    Zero external deps — instant response.
+    """
+    results = []
+    for i, text in enumerate(body.texts[:30]):
+        t = text.lower()
+        bull  = [k for k in _SBULL  if k in t]
+        bear  = [k for k in _SBEAR  if k in t]
+        sbull = [k for k in _SSBULL if k in t]
+        sbear = [k for k in _SSBEAR if k in t]
+        score = max(-1.0, min(1.0, round(
+            len(bull)*0.15 + len(sbull)*0.40 - len(bear)*0.15 - len(sbear)*0.40, 3
+        )))
+        label = "positive" if score > 0.2 else ("negative" if score < -0.2 else "neutral")
+        results.append({
+            "index": i, "text": text[:200], "score": score, "label": label,
+            "bull_signals": bull + sbull, "bear_signals": bear + sbear,
+            "emoji": "🟢" if score > 0.1 else ("🔴" if score < -0.1 else "⚪"),
+        })
+
+    avg   = round(sum(r["score"] for r in results) / len(results), 3) if results else 0
+    return {
+        "results": results, "count": len(results), "avg_score": avg,
+        "positive": sum(1 for r in results if r["label"]=="positive"),
+        "negative": sum(1 for r in results if r["label"]=="negative"),
+        "neutral":  sum(1 for r in results if r["label"]=="neutral"),
+        "overall":  "🟢 Bullish" if avg > 0.15 else ("🔴 Bearish" if avg < -0.15 else "⚪ Neutral"),
+        "method": "keyword-lexicon (FinBERT-distilled)",
     }

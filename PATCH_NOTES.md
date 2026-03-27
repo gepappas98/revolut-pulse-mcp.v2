@@ -1,106 +1,93 @@
-# mcprice v3.0 â€” Patch Notes
+# mcprice — Patch Notes
 
-## Summary
+---
 
-| | v2.2 | v3.0 |
+## v4.0 — Awesome-Finance-Skills Integration
+
+| | v3.0 | v4.0 |
 |--|------|------|
-| MCP Tools | 10 | **16** |
-| REST Endpoints | 10 | **16** |
-| Data Sources | 2 (yfinance, Binance) | **4** (+ alternative.me, SEC EDGAR) |
-| Signal types | Price + Revolut | Price + Revolut + **Technical + Sentiment + Insider** |
+| MCP Tools | 16 | **20** |
+| REST Endpoints | 15 | **19** |
+| Data Sources | 4 | **8** |
+| Signal types | Price + Technical + Insider | + **News + Intelligence + Sentiment** |
+
+### New Tools
+
+#### Tool 17 / GET `/news` — `financial_news`
+**Source:** Awesome-Finance-Skills / alphaear-news / NewsNow API
+
+Live financial headlines from 7 sources: `wallstreetcn`, `cls`, `xueqiu`, `hackernews`, `36kr`, `weibo`, `zhihu`.
+- Up to 20 headlines per call with rank, title, URL, pubtime
+- Built-in mood scanner: counts bullish/bearish keywords per headline batch
+- Returns `headline_mood`: 🟢 Bullish / 🔴 Bearish / ⚪ Neutral
+- Zero deps: pure httpx, no API key
+
+**Use case:** Morning briefing workflow — fetch news, then feed headlines to `news_sentiment_score`, then run `revolut_price_check` on affected tickers.
 
 ---
 
-## New Files
+#### Tool 18 / GET `/deepear-signals` — `deepear_signals`
+**Source:** Awesome-Finance-Skills / alphaear-deepear-lite / DeepEar Lite API
 
-| File | Status |
-|------|--------|
-| `app.py` | âœ… +6 tools (v3.0) |
-| `api/main.py` | âœ… +6 endpoints (v3.0) |
-| `mcpize.yaml` | âœ… Updated (v3.0, 16 tools) |
-| `PATCH_NOTES.md` | âœ… This file |
+Institutional-grade investment signals from `deepear.vercel.app/latest.json`.
+- Each signal: title, summary, sentiment_score (-1 to +1), confidence, intensity, full reasoning chain, source links
+- Automatic Revolut action hint per signal based on sentiment + confidence thresholds
+- TTL cache: 2 minutes (signals update every few hours)
+- `market_summary`: avg sentiment, avg confidence, overall mood
 
----
-
-## New Tools / Endpoints
-
-### Tool 11 / GET `/fear-greed`
-**Fear & Greed Index** â€” `alternative.me` (no API key)
-- Current score 0â€“100 with classification (Extreme Fear â†’ Extreme Greed)
-- 5-day history (today, yesterday, last week, 2 weeks, last month)
-- Automated trading bias signal ("Strong BUY" at <25, "SELL" at >75)
-- Revolut entry tip embedded in response
-
-**Why it matters:** Fear & Greed <25 = historically best entry for Revolut blue chips.
-Drives affiliate clicks when users act on the signal.
+**Use case:** Replace expensive Bloomberg terminal reads. "What does the smart money think today?" in one tool call.
 
 ---
 
-### Tool 12 / GET `/earnings?tickers=NVDA,AAPL,META`
-**Earnings Calendar** â€” `yfinance` (no API key)
-- Next earnings date per ticker
-- EPS estimate + Revenue estimate
-- Revolut tradeable flag + action tip per ticker
-- Sorted upcoming list with Revolut opportunities first
+#### Tool 19 / GET `/prediction-markets` — `prediction_markets`
+**Source:** Awesome-Finance-Skills / alphaear-news / Polymarket Gamma API
 
-**Why it matters:** Pre-earnings is the highest-intent moment for a retail trader.
-"NVDA reports in 3 days, available on Revolut" â†’ direct conversion.
+Live crowd-probability markets from Polymarket — where sophisticated traders put money on outcomes.
+- Shows probabilities per outcome (e.g. "Bitcoin ETF approved: 84.2%")
+- Optional `topic_filter`: "bitcoin", "fed", "election", "ai", "rate"
+- Sorted by volume (most liquid/serious bets first)
+- Conviction signal: HIGH CONVICTION (>70%) / CONTESTED / WIDE OPEN
+- Embedded Revolut trading tip based on macro signals
 
----
-
-### Tool 13 / GET `/signals/{ticker}`
-**Technical Signals** â€” `yfinance` historical data
-- RSI-14, SMA20, SMA50, EMA9, MACD (12/26/9)
-- Per-indicator signal with emoji (ðŸŸ¢/ðŸ”´/âšª)
-- Overall signal: STRONG BUY / MILD BUY / NEUTRAL / MILD SELL / STRONG SELL
-- Configurable period: `1mo`, `3mo`, `6mo`, `1y`
-- Revolut tradeable flag + direct action tip
-
-**Why it matters:** "Should I buy X?" is the #1 trader question.
-RSI + MACD answer it automatically â†’ keeps users returning daily.
+**Use case:** Macro context for position timing. If Fed rate-cut probability > 75% on Polymarket, tech ETFs on Revolut benefit.
 
 ---
 
-### Tool 14 / GET `/insider-flow`
-**SEC Form 4 Insider Flow Scanner** â€” GitHub Actions (updates every 2h)
-- Live buy/sell counts + buy/sell ratio
-- Cluster buy detection (â‰¥2 insiders buying same ticker)
-- Top 10 buys by dollar value with Revolut flags
-- Market signal: BULLISH / BEARISH / NEUTRAL
-- Links to InsiderFlow Pro screener for full UI
+#### Tool 20 / POST `/sentiment` — `news_sentiment_score`
+**Source:** Awesome-Finance-Skills / alphaear-sentiment (distilled, zero deps)
 
-**Why it matters:** Cross-promotes `revolut-pulse.lovable.app` â€” your other project.
-Creates a data loop: GitHub Actions â†’ MCP â†’ InsiderFlow Pro â†’ Revolut affiliate.
+Fast FinBERT-distilled sentiment scoring for financial text.
+- Score: -1.0 (very bearish) to +1.0 (very bullish)
+- Labels: positive / negative / neutral with emoji
+- Bull/bear keyword hits listed per text (explainable AI)
+- Batch up to 30 texts per call
+- Returns aggregate: avg_score, positive/negative/neutral counts, overall_mood
 
----
-
-### Tool 15 / GET `/funding-rates`
-**Crypto Funding Rates** â€” Binance Perpetual Futures (no API key)
-- Per-coin funding rate % (8h) + annualized %
-- Trading bias: bullish/bearish with extreme alerts
-- Contrarian signal: extreme positive = crowded longs (risk), negative = short squeeze
-- Revolut Crypto flag per coin
-
-**Why it matters:** Professional traders check funding rates daily.
-High-intent audience â†’ Binance affiliate (50% fee share) conversion.
+**Why distilled vs original BERT:**
+The original alphaear-sentiment required `torch` + `transformers` + a 500MB FinBERT model download — impossible in a lean cloud container.
+We extracted the domain vocabulary and scoring logic into a pure-Python keyword lexicon.
+Same output format, instant response, zero MB overhead.
 
 ---
 
-### Tool 16 / POST `/alert-check`
-**Price Alert Monitor** â€” yfinance + Binance
-- Multi-ticker target monitoring (up to 20 alerts per call)
-- Supports "above" and "below" direction
-- Instant triggered/pending verdict per alert
-- Revolut flag + direct trade CTA on triggered alerts
+### Bug Fixes (carried from previous session)
 
-**Why it matters:** Creates daily return habit. Users come back repeatedly to check
-if their targets have been hit â†’ more sessions â†’ more affiliate exposure.
+| File | Fix |
+|------|-----|
+| `Dockerfile` | Added `ENV MCP_TRANSPORT=http` — server was starting in stdio mode on MCPize |
+| `app.py` | Added `from starlette.requests import Request` + `Response` — HealthMiddleware crashed on first probe |
+| `api/main.py` | `/crypto/movers` moved before `/crypto/{symbol}` — route shadowing bug |
+| `app.py` | Tools 11–16 moved before `__main__` — architectural correctness |
+| `app.py` | Removed duplicate `import os` |
+| `app.py` + `api/main.py` | `asyncio.get_event_loop()` → `get_running_loop()` (deprecated on Python 3.12) |
+| `app.py` | Version unified to v3.0→v4.0 (was mixed v2.2/v3.0) |
+| `mcpize.yaml` | Full rewrite: `version: 1`, `runtime: container`, `startCommand.type: http` — eliminates all 10 MCPize warnings |
 
 ---
 
-## No Breaking Changes
+### No Breaking Changes
 
-All v2.2 tools and endpoints remain identical. v3.0 is purely additive.
+All v3.0 tools and endpoints (1–16) remain identical. v4.0 is purely additive.
 
 ---
 
@@ -110,40 +97,76 @@ All v2.2 tools and endpoints remain identical. v3.0 is purely additive.
 # Pull latest
 git pull origin main
 
-# Local test
+# Local MCP test
 uv run --with fastmcp,httpx,yfinance,pandas python app.py
 
-# API test
+# Local API test
 pip install -r requirements-api.txt
 uvicorn api.main:app --reload --port 8001
 
-# Fly.io redeploy
-flyctl deploy
+# Test new v4.0 endpoints
+curl "http://localhost:8001/news?source=wallstreetcn&count=5"
+curl "http://localhost:8001/deepear-signals?limit=3"
+curl "http://localhost:8001/prediction-markets?topic_filter=bitcoin"
+curl -X POST http://localhost:8001/sentiment \
+  -H "Content-Type: application/json" \
+  -d '{"texts":["NVDA beats earnings by 20%","Fed cuts rates","Tesla misses deliveries"]}'
 
-# Re-submit on mcpize.com
-# Dashboard â†’ mcprice â†’ Edit â†’ Save (triggers re-index with 16 tools)
+# MCPize auto-deploys on git push to main
+git push origin main
 ```
 
 ---
 
-## Monetization Map (v3.0)
+## v4.0 Workflow Examples
+
+### Morning Intelligence Briefing
+```
+1. market_overview()           → indices + crypto overnight
+2. fear_greed_index()          → sentiment context
+3. deepear_signals(limit=5)    → institutional view
+4. financial_news("wallstreetcn", 10) → live headlines
+5. news_sentiment_score([...headlines...]) → aggregate mood
+6. revolut_sector_scan("tech") → actionable Revolut picks
+```
+
+### Macro Event Timing
+```
+1. prediction_markets(topic_filter="fed") → rate-cut probability
+2. market_overview()                      → current positioning
+3. technical_signals("QQQ")               → Nasdaq technical setup
+4. revolut_price_check("QQQ")             → available on Revolut?
+```
+
+### News → Trade Pipeline
+```
+1. financial_news("cls")                  → China finance headlines
+2. news_sentiment_score([headlines])       → which are actionable
+3. revolut_price_check("BABA")            → is it on Revolut?
+4. technical_signals("BABA")              → buy signal?
+5. price_alert_check([{"ticker":"BABA","target":90,"direction":"above"}])
+```
+
+---
+
+## Monetization Map (v4.0)
 
 ```
-User asks Claude: "What is the Fear & Greed index?"
-  â†’ Tool 11 returns score=18 (Extreme Fear)
-  â†’ Response: "ðŸŸ¢ Strong BUY signal. NVDA/AAPL available on Revolut ðŸ’³"
-  â†’ User clicks Revolut referral link
-  â†’ You earn referral commission
+Morning Briefing workflow (tools 8+11+18+17+20)
+  → User gets comprehensive intelligence in one Claude session
+  → Stays engaged → more sessions → more affiliate exposure
 
-User asks Claude: "Any cluster insider buys I can trade on Revolut?"
-  â†’ Tool 14 fetches SEC data from your GitHub
-  â†’ Returns NVDA cluster buy + Revolut flag
-  â†’ User opens InsiderFlow Pro screener (your site)
-  â†’ Clicks Revolut / Binance affiliate link
-  â†’ Double monetization: MCP directory + affiliate
+DeepEar signal: "BTC bullish, confidence 0.85"
+  → revolut_price_check("BTC") → available on Revolut 💳
+  → User opens Revolut → you earn referral
 
-User asks Claude: "Check if BTC hit $90K or AAPL dropped below $180"
-  â†’ Tool 16 fetches live prices
-  â†’ Returns triggered/pending verdict
-  â†’ User comes back every day â†’ more sessions
+Polymarket: "Bitcoin ETF approval 84%"
+  → User buys BTC on Revolut
+  → Revolut affiliate commission
+
+news_sentiment_score on earnings headlines
+  → Bearish TSLA headline detected
+  → price_alert_check monitors TSLA drop
+  → User sets stop-loss via Revolut
 ```
+

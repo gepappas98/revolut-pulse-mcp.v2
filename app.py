@@ -2,15 +2,15 @@
 
 """
 ╔══════════════════════════════════════════════════════════════════╗
-║  mcprice v3.0                                                    ║
-║  Real-Time Price MCP Server for Claude / Cursor                  ║
+║  mcprice v4.0                                                    ║
+║  Real-Time Financial Intelligence MCP for Claude / Cursor        ║
 ║                                                                  ║
 ║  Stocks  → yfinance  (cloud-reliable, no raw HTTP blocks)        ║
 ║  Crypto  → Binance Public API + Futures (no key needed)          ║
 ║  Revolut → marks assets tradeable on Revolut                     ║
 ║  Insider → SEC EDGAR Form 4 via GitHub Actions                   ║
 ║                                                                  ║
-║  v3.0 new tools (+6):                                            ║
+║  v4.0 new tools from Awesome-Finance-Skills (+4):               ║
 ║   ✅ fear_greed_index   — alternative.me sentiment (no key)      ║
 ║   ✅ earnings_calendar  — next earnings date + EPS estimates      ║
 ║   ✅ technical_signals  — RSI, SMA, EMA, MACD buy/sell signal    ║
@@ -18,7 +18,7 @@
 ║   ✅ crypto_funding_rates — Binance perp funding (contrarian)    ║
 ║   ✅ price_alert_check  — multi-ticker target monitoring         ║
 ║                                                                  ║
-║  Tools (16 total):                                               ║
+║  Tools (20 total):                                               ║
 ║   1.  get_price             — single stock/ETF price             ║
 ║   2.  get_prices_bulk       — up to 20 tickers at once           ║
 ║   3.  get_crypto_price      — Binance crypto price               ║
@@ -35,6 +35,10 @@
 ║  14.  insider_flow_scan     — SEC Form 4 cluster buy detection   ║
 ║  15.  crypto_funding_rates  — Binance perp funding rates         ║
 ║  16.  price_alert_check     — multi-target alert monitor         ║
+║  17.  financial_news        — live headlines (NewsNow, WallStrCN)║
+║  18.  deepear_signals       — DeepEar Lite investment signals     ║
+║  19.  prediction_markets    — Polymarket crowd probabilities      ║
+║  20.  news_sentiment_score  — FinBERT-distilled text sentiment    ║
 ╚══════════════════════════════════════════════════════════════════╝
 """
 
@@ -1389,15 +1393,428 @@ async def price_alert_check(alerts: List[dict]) -> dict:
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# TOOL 17 — financial_news
+# Source: Awesome-Finance-Skills / alphaear-news (NewsNow API)
+# ─────────────────────────────────────────────────────────────────────────────
+
+NEWS_SOURCES = {
+    # Finance
+    "cls":           "财联社 (CLS Finance)",
+    "wallstreetcn":  "Wall Street CN",
+    "xueqiu":        "Xueqiu",
+    # Global / Tech
+    "hackernews":    "Hacker News",
+    "36kr":          "36Kr Tech",
+    # Social
+    "weibo":         "Weibo Trending",
+    "zhihu":         "Zhihu Hot",
+}
+
+@mcp.tool()
+async def financial_news(source: str = "wallstreetcn", count: int = 10) -> dict:
+    """
+    Fetch real-time hot financial news headlines from multiple sources.
+    No API key required. Great for pre-trade news scan.
+
+    Args:
+        source: News source. Options:
+            Finance: "cls" (CLS), "wallstreetcn" (Wall Street CN), "xueqiu"
+            Global:  "hackernews", "36kr"
+            Social:  "weibo", "zhihu"
+            Default: "wallstreetcn"
+        count: Number of headlines to fetch (default 10, max 20)
+    """
+    source = source.lower().strip()
+    if source not in NEWS_SOURCES:
+        return {
+            "error": f"Unknown source '{source}'",
+            "available_sources": list(NEWS_SOURCES.keys()),
+        }
+    count = min(int(count), 20)
+
+    url = f"https://newsnow.busiyi.world/api/s?id={source}"
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(url, headers=HEADERS)
+            r.raise_for_status()
+            data = r.json()
+    except Exception as exc:
+        return {"error": f"NewsNow API failed: {exc}", "source": source}
+
+    items = data.get("items", [])[:count]
+    if not items:
+        return {"error": "No news items returned", "source": source}
+
+    headlines = []
+    for i, item in enumerate(items, 1):
+        headlines.append({
+            "rank":    i,
+            "title":   item.get("title", ""),
+            "url":     item.get("url", ""),
+            "pubtime": item.get("publish_time", ""),
+        })
+
+    # Quick sentiment scan on titles
+    bullish_kw = {"rise", "up", "bull", "surge", "beat", "profit", "growth",
+                  "gain", "strong", "high", "record", "buy", "rally", "上涨",
+                  "涨", "利好", "增长", "盈利", "新高"}
+    bearish_kw = {"fall", "down", "bear", "drop", "miss", "loss", "decline",
+                  "weak", "low", "sell", "crash", "risk", "下跌", "跌", "利空",
+                  "亏损", "下行", "风险", "警告"}
+
+    bull_count = bear_count = 0
+    for h in headlines:
+        t = h["title"].lower()
+        if any(k in t for k in bullish_kw): bull_count += 1
+        if any(k in t for k in bearish_kw): bear_count += 1
+
+    mood = "🟢 Bullish" if bull_count > bear_count else ("🔴 Bearish" if bear_count > bull_count else "⚪ Neutral")
+
+    return {
+        "source":       source,
+        "source_name":  NEWS_SOURCES[source],
+        "count":        len(headlines),
+        "headlines":    headlines,
+        "headline_mood": mood,
+        "bull_signals": bull_count,
+        "bear_signals": bear_count,
+        "revolut_tip": (
+            "💳 Cross-reference these headlines with revolut_price_check() "
+            "or revolut_sector_scan() to find actionable Revolut trades."
+        ),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TOOL 18 — deepear_signals
+# Source: Awesome-Finance-Skills / alphaear-deepear-lite (DeepEar Lite API)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@ttl_cache(ttl=120)  # 2-min cache — signals update every few hours
+async def _fetch_deepear_raw() -> dict:
+    url = "https://deepear.vercel.app/latest.json"
+    async with httpx.AsyncClient(timeout=12) as c:
+        r = await c.get(url, headers={
+            "User-Agent": "mcprice/3.0 (MCP Server; +https://github.com/gepappas98/mcprice)",
+            "Referer":    "https://deepear.vercel.app/lite",
+        })
+        r.raise_for_status()
+        return r.json()
+
+
+@mcp.tool()
+async def deepear_signals(limit: int = 5) -> dict:
+    """
+    Fetch live professional investment signals from DeepEar Lite — no API key.
+    Each signal includes title, confidence, intensity, sentiment score,
+    reasoning chain, and source links. Updated every few hours.
+    Perfect for institutional-grade market intelligence.
+
+    Args:
+        limit: Number of signals to return (default 5, max 10)
+    """
+    limit = min(int(limit), 10)
+    try:
+        data = await _fetch_deepear_raw()
+    except Exception as exc:
+        return {"error": f"DeepEar API unavailable: {exc}"}
+
+    generated_at = data.get("generated_at", "unknown")
+    raw_signals   = data.get("signals", [])
+
+    if not raw_signals:
+        return {"error": "No signals in DeepEar feed", "generated_at": generated_at}
+
+    signals = []
+    for s in raw_signals[:limit]:
+        sentiment  = float(s.get("sentiment_score", 0))
+        confidence = float(s.get("confidence", 0))
+        intensity  = float(s.get("intensity", 0))
+
+        # Map sentiment to Revolut action
+        if sentiment > 0.3 and confidence > 0.6:
+            revolut_action = "💳 CONSIDER BUY on Revolut — strong positive signal"
+        elif sentiment < -0.3 and confidence > 0.6:
+            revolut_action = "⚠️  CAUTION — bearish signal, review Revolut holdings"
+        else:
+            revolut_action = "⏳ MONITOR — signal not strong enough for immediate action"
+
+        sources = [
+            {"name": src.get("name", "Link"), "url": src.get("url", "")}
+            for src in s.get("sources", [])
+        ]
+
+        signals.append({
+            "title":          s.get("title", ""),
+            "summary":        s.get("summary", ""),
+            "sentiment_score": round(sentiment, 3),
+            "confidence":      round(confidence, 3),
+            "intensity":       round(intensity, 3),
+            "reasoning":       s.get("reasoning", ""),
+            "sources":         sources,
+            "revolut_action":  revolut_action,
+            "emoji": (
+                "🟢" if sentiment > 0.2 else
+                "🔴" if sentiment < -0.2 else "⚪"
+            ),
+        })
+
+    avg_sentiment  = round(sum(s["sentiment_score"] for s in signals) / len(signals), 3) if signals else 0
+    avg_confidence = round(sum(s["confidence"] for s in signals) / len(signals), 3) if signals else 0
+
+    return {
+        "generated_at":   generated_at,
+        "signals_count":  len(signals),
+        "signals":        signals,
+        "market_summary": {
+            "avg_sentiment":  avg_sentiment,
+            "avg_confidence": avg_confidence,
+            "overall_mood":   (
+                "🟢 Bullish consensus"   if avg_sentiment > 0.2 else
+                "🔴 Bearish consensus"   if avg_sentiment < -0.2 else
+                "⚪ Mixed / Neutral"
+            ),
+        },
+        "source": "deepear.vercel.app/lite",
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TOOL 19 — prediction_markets
+# Source: Awesome-Finance-Skills / alphaear-news (PolymarketTools)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def prediction_markets(limit: int = 10, topic_filter: Optional[str] = None) -> dict:
+    """
+    Fetch live Polymarket prediction markets — crowd probability on real-world events.
+    No API key needed. Shows where smart money places probability bets.
+    Great for macro context: elections, crypto ETF approvals, Fed decisions, etc.
+
+    Args:
+        limit: Number of markets to return (default 10, max 30)
+        topic_filter: Optional keyword filter e.g. "bitcoin", "fed", "election"
+    """
+    limit = min(int(limit), 30)
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(
+                "https://gamma-api.polymarket.com/markets",
+                params={"active": "true", "closed": "false", "limit": str(limit * 2)},
+                headers=HEADERS,
+            )
+            r.raise_for_status()
+            raw = r.json()
+    except Exception as exc:
+        return {"error": f"Polymarket API failed: {exc}"}
+
+    if not raw:
+        return {"error": "No markets returned from Polymarket"}
+
+    # Filter by topic if provided
+    if topic_filter:
+        kw = topic_filter.lower()
+        raw = [m for m in raw if kw in (m.get("question", "") + m.get("slug", "")).lower()]
+
+    markets = []
+    for m in raw[:limit]:
+        question = m.get("question", "")
+        outcomes  = m.get("outcomes", [])
+        prices    = m.get("outcomePrices", [])
+        volume    = m.get("volume", 0)
+        liquidity = m.get("liquidity", 0)
+
+        # Parse probabilities
+        prob_pairs = []
+        try:
+            outcomes_list = outcomes if isinstance(outcomes, list) else []
+            prices_list   = prices   if isinstance(prices, list)   else []
+            for o, p in zip(outcomes_list, prices_list):
+                try:
+                    prob_pairs.append({"outcome": str(o), "probability": f"{float(p)*100:.1f}%"})
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Signal: is the leading probability strong (>70%)?
+        top_prob = 0.0
+        if prob_pairs:
+            try:
+                top_prob = max(float(p.replace("%","")) for p in
+                               [pp["probability"] for pp in prob_pairs])
+            except Exception:
+                pass
+
+        signal = (
+            f"🎯 HIGH CONVICTION ({top_prob:.0f}%) — market has strong consensus"
+            if top_prob > 70 else
+            "⚖️  CONTESTED — outcome still uncertain"
+            if top_prob > 40 else
+            "❓ WIDE OPEN — no clear market consensus"
+        )
+
+        markets.append({
+            "question":    question,
+            "probabilities": prob_pairs,
+            "volume_usd":  round(float(volume), 0) if volume else 0,
+            "liquidity":   round(float(liquidity), 0) if liquidity else 0,
+            "signal":      signal,
+            "slug_url":    f"https://polymarket.com/event/{m.get('slug', '')}",
+        })
+
+    # Sort by volume (most liquid markets first)
+    markets.sort(key=lambda x: x["volume_usd"], reverse=True)
+
+    return {
+        "total_markets": len(markets),
+        "topic_filter":  topic_filter or "none",
+        "markets":       markets,
+        "revolut_tip": (
+            "💳 Use prediction markets for macro timing: "
+            "if Bitcoin ETF approval probability > 80%, "
+            "consider BTC via Revolut Crypto. "
+            "If rate-cut probability high, tech stocks on Revolut benefit."
+        ),
+        "source": "Polymarket Gamma API (no key)",
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TOOL 20 — news_sentiment_score
+# Source: Awesome-Finance-Skills / alphaear-sentiment (adapted, zero deps)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Financial sentiment lexicon (distilled from FinBERT + domain knowledge)
+_FIN_BULLISH = {
+    # English
+    "surge", "soar", "rally", "beat", "outperform", "upgrade", "bullish",
+    "record high", "strong", "growth", "profit", "revenue beat", "raise",
+    "buy", "overweight", "breakthrough", "expansion", "recovery", "upbeat",
+    "positive", "gain", "rise", "climb", "boost", "exceed", "optimistic",
+    # Finance specific
+    "eps beat", "guidance raised", "buyback", "dividend increase", "market share",
+    "customer growth", "margin expansion", "free cash flow",
+}
+
+_FIN_BEARISH = {
+    # English
+    "crash", "plunge", "slump", "miss", "underperform", "downgrade", "bearish",
+    "record low", "weak", "loss", "revenue miss", "cut", "sell", "underweight",
+    "recall", "layoff", "restructuring", "investigation", "lawsuit", "fraud",
+    "negative", "fall", "drop", "decline", "concern", "warning", "risk",
+    # Finance specific
+    "eps miss", "guidance cut", "margin compression", "cash burn", "write-off",
+    "impairment", "debt default", "tariff", "regulation", "fine", "penalty",
+}
+
+_FIN_STRONG_BULLISH = {
+    "record earnings", "blowout quarter", "massive beat", "all-time high",
+    "short squeeze", "massive rally", "explosive growth",
+}
+
+_FIN_STRONG_BEARISH = {
+    "bankruptcy", "fraud", "collapse", "crisis", "catastrophic", "wipeout",
+    "delisted", "sec investigation", "accounting scandal", "going concern",
+}
+
+
+def _keyword_sentiment(text: str) -> dict:
+    """Pure-Python financial sentiment scoring — zero external deps."""
+    t = text.lower()
+    words = set(t.split())
+
+    bull_hits  = [k for k in _FIN_BULLISH if k in t]
+    bear_hits  = [k for k in _FIN_BEARISH if k in t]
+    sbull_hits = [k for k in _FIN_STRONG_BULLISH if k in t]
+    sbear_hits = [k for k in _FIN_STRONG_BEARISH if k in t]
+
+    score = (
+        len(bull_hits)  * 0.15 +
+        len(sbull_hits) * 0.40 -
+        len(bear_hits)  * 0.15 -
+        len(sbear_hits) * 0.40
+    )
+    # Clamp to [-1, 1]
+    score = max(-1.0, min(1.0, round(score, 3)))
+
+    if score > 0.2:   label = "positive"
+    elif score < -0.2: label = "negative"
+    else:             label = "neutral"
+
+    return {
+        "score":       score,
+        "label":       label,
+        "bull_signals": bull_hits  + sbull_hits,
+        "bear_signals": bear_hits  + sbear_hits,
+    }
+
+
+@mcp.tool()
+async def news_sentiment_score(texts: List[str]) -> dict:
+    """
+    Fast financial sentiment scoring for a list of texts (headlines, news, etc.).
+    Zero dependencies — pure Python keyword lexicon distilled from FinBERT.
+    Score range: -1.0 (very bearish) to +1.0 (very bullish).
+
+    Args:
+        texts: List of financial text strings to analyze.
+               e.g. ["NVDA beats earnings by 20%", "Fed cuts rates 50bps",
+                     "Tesla misses delivery targets", "BTC hits all-time high"]
+    """
+    if not texts:
+        return {"error": "No texts provided"}
+
+    results = []
+    total_score = 0.0
+
+    for i, text in enumerate(texts[:30]):
+        s = _keyword_sentiment(text)
+        s["text"]   = text[:200]
+        s["index"]  = i
+        s["emoji"]  = "🟢" if s["score"] > 0.1 else ("🔴" if s["score"] < -0.1 else "⚪")
+        s["summary"] = (
+            f"{s['emoji']} {s['label'].upper()} ({s['score']:+.2f}) — {text[:60]}{'...' if len(text)>60 else ''}"
+        )
+        results.append(s)
+        total_score += s["score"]
+
+    n = len(results)
+    avg = round(total_score / n, 3) if n else 0
+    positive_count = sum(1 for r in results if r["label"] == "positive")
+    negative_count = sum(1 for r in results if r["label"] == "negative")
+    neutral_count  = sum(1 for r in results if r["label"] == "neutral")
+
+    return {
+        "results":        results,
+        "count":          n,
+        "avg_score":      avg,
+        "positive_count": positive_count,
+        "negative_count": negative_count,
+        "neutral_count":  neutral_count,
+        "overall_mood": (
+            "🟢 Bullish" if avg > 0.15 else
+            "🔴 Bearish" if avg < -0.15 else
+            "⚪ Neutral / Mixed"
+        ),
+        "revolut_tip": (
+            "💳 Use with financial_news() to scan headlines, then run "
+            "revolut_price_check() on the affected tickers."
+        ),
+        "method": "keyword-lexicon (FinBERT-distilled, zero external deps)",
+    }
+
+
 if __name__ == "__main__":
     transport = os.environ.get("MCP_TRANSPORT", "stdio")
     if transport == "http":
         port = int(os.environ.get("PORT", "8080"))
-        logger.info("mcprice v3.0 — http://0.0.0.0:%d/mcp", port)
+        logger.info("mcprice v4.0 — http://0.0.0.0:%d/mcp", port)
         app = mcp.http_app()
         app.add_middleware(HealthMiddleware)
         import uvicorn
         uvicorn.run(app, host="0.0.0.0", port=port)
     else:
-        logger.info("mcprice v3.0 — stdio mode")
+        logger.info("mcprice v4.0 — stdio mode")
         mcp.run(transport="stdio")

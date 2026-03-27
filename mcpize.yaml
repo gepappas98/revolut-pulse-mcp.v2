@@ -3,15 +3,16 @@ name: mcprice
 description: >
   Real-time stock & crypto prices for AI agents — with Revolut availability,
   Fear & Greed index, technical signals (RSI/MACD/SMA/EMA), SEC insider flow,
-  earnings calendar, crypto funding rates, and price alert monitoring.
-  16 tools. No API keys. Free forever.
+  earnings calendar, crypto funding rates, price alert monitoring,
+  live financial news, DeepEar investment signals, Polymarket prediction markets,
+  and instant FinBERT-distilled sentiment scoring.
+  20 tools. No API keys. Free forever.
   Tools: get_price, get_prices_bulk, get_crypto_price, price_snapshot,
   revolut_price_check, crypto_top_movers, portfolio_pnl, market_overview,
   revolut_watchlist, revolut_sector_scan, fear_greed_index, earnings_calendar,
-  technical_signals, insider_flow_scan, crypto_funding_rates, price_alert_check.
-  Ask Claude: "Is NVDA on Revolut?", "What is the Fear & Greed index?",
-  "Give me RSI signal for AAPL", "Scan defense sector", "When does NVDA report earnings?"
-  Stocks via yfinance, crypto via Binance.
+  technical_signals, insider_flow_scan, crypto_funding_rates, price_alert_check,
+  financial_news, deepear_signals, prediction_markets, news_sentiment_score.
+  Stocks via yfinance, crypto via Binance, news via NewsNow + DeepEar + Polymarket.
 runtime: container
 entry: app.py
 
