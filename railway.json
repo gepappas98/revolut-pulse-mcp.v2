@@ -14,7 +14,7 @@
     "production": {
       "variables": {
         "MCP_TRANSPORT": "http",
-        "PORT": "8000"
+        "PORT": "8080"
       }
     }
   }
