@@ -1,31 +1,22 @@
-name: Deploy mcprice v5
+name: Deploy to Railway
 
 on:
   push:
-    branches: [ main ]
-  workflow_dispatch:
+    branches: [main]
 
 jobs:
   deploy:
+    name: Deploy mcprice → Railway
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install deps
-        run: pip install -r requirements.txt
-
-      - name: Generate SEO pages
-        run: python seo/generator.py --base-url https://mcpize.com/mcp/mcprice --no-live
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
-      - name: Deploy to Railway
-        run: railway up --service mcprice --detach
+      - name: Deploy
+        run: railway up --detach
         env:
-          RAILWAY_TOKEN: ${{ e8b2e1a5-7a13-4255-aad8-047570adfcf6 }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
