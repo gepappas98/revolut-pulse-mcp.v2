@@ -1,4 +1,4 @@
-name: Deploy mcprice v3
+name: Deploy mcprice v5
 
 on:
   push:
@@ -17,16 +17,15 @@ jobs:
           python-version: "3.12"
 
       - name: Install deps
-        run: |
-          pip install -r requirements.txt
-          pip install -r requirements-api.txt
+        run: pip install -r requirements.txt
 
-      - name: Generate SEO pages (no-live for speed)
+      - name: Generate SEO pages
         run: python seo/generator.py --base-url https://mcpize.com/mcp/mcprice --no-live
 
-      - name: Deploy to Fly.io
-        uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
 
-      - run: flyctl deploy --remote-only
+      - name: Deploy to Railway
+        run: railway up --service mcprice --detach
         env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
