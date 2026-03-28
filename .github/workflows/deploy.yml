@@ -28,4 +28,4 @@ jobs:
       - name: Deploy to Railway
         run: railway up --service mcprice --detach
         env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_TOKEN: ${{ e8b2e1a5-7a13-4255-aad8-047570adfcf6 }}
