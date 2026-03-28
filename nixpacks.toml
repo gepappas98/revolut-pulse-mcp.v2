@@ -1,0 +1,20 @@
+[phases.setup]
+nixPkgs = ["python312"]
+
+[phases.install]
+cmds = ["pip install -r requirements.txt"]
+
+[start]
+cmd = "python app.py"
+
+[variables]
+MCP_TRANSPORT = "http"
+```
+
+**4.** Κλικ **"Commit new file"** ✅
+
+---
+
+Ίδια διαδικασία και για το `Procfile` αν δεν υπάρχει — "Create new file" → όνομα `Procfile` → περιεχόμενο:
+```
+web: python app.py
